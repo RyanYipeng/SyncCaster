@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["vite/client", "chrome"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@synccaster/core": ["../../packages/core/src"],
+      "@synccaster/adapters": ["../../packages/adapters/src"],
+      "@synccaster/utils": ["../../packages/utils/src"]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "src/**/*.vue"
+  ]
+}

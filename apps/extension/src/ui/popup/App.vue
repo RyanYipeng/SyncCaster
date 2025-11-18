@@ -125,18 +125,56 @@ async function loadData() {
 async function collectFromCurrentPage() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab.id) return;
+    if (!tab || !tab.id) throw new Error('No active tab');
 
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      type: 'COLLECT_CONTENT',
-    });
+    const sendCollectMessage = (): Promise<any> =>
+      new Promise((resolve, reject) => {
+        try {
+          chrome.tabs.sendMessage(tab.id!, { type: 'COLLECT_CONTENT' }, (resp) => {
+            const lastErr = chrome.runtime.lastError;
+            if (lastErr) return reject(new Error(lastErr.message));
+            resolve(resp);
+          });
+        } catch (e: any) {
+          reject(e);
+        }
+      });
+
+    let response: any;
+    try {
+      // 第一次尝试，假设 content script 已注入
+      response = await sendCollectMessage();
+    } catch (err) {
+      // 若未注入，则动态注入后重试
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content-scripts.js'],
+      });
+      // 等待注入完成
+      await new Promise((r) => setTimeout(r, 150));
+      response = await sendCollectMessage();
+    }
 
     console.log('Collected content:', response);
-    alert('内容采集成功！');
-    
-    // 跳转到编辑器
+    if (!response || !response.success || !response.data) {
+      throw new Error('采集结果为空');
+    }
+
+    // 将采集结果交给 background 保存
+    const saveResult = await chrome.runtime.sendMessage({
+      type: 'SAVE_POST',
+      data: response.data,
+    });
+
+    if (!saveResult?.success) {
+      throw new Error(saveResult?.error || '保存失败');
+    }
+
+    alert('内容采集并保存成功！');
+
+    // 打开文章管理视图，方便立即查看
     chrome.tabs.create({
-      url: chrome.runtime.getURL('src/ui/options/index.html#/editor/new'),
+      url: chrome.runtime.getURL('src/ui/options/index.html#posts'),
     });
   } catch (error: any) {
     console.error('Collection failed:', error);

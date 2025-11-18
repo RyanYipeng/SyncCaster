@@ -36,7 +36,13 @@ const columns = [
   {
     title: '更新时间',
     key: 'updatedAt',
-    render: (row: any) => new Date(row.updatedAt).toLocaleDateString('zh-CN'),
+    render: (row: any) => {
+      const s = new Date(row.updatedAt).toLocaleString('zh-CN', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit'
+      });
+      return h('span', { style: 'white-space:nowrap' }, s);
+    },
   },
   {
     title: '操作',
@@ -74,15 +80,16 @@ async function loadPosts() {
 }
 
 function createPost() {
-  alert('新建文章功能待实现');
+  window.location.hash = 'editor/new';
 }
 
 function editPost(id: string) {
-  alert(`编辑文章: ${id}`);
+  window.location.hash = `editor/${id}`;
 }
 
 function publishPost(id: string) {
-  alert(`发布文章: ${id}`);
+  // 暂未实现发布，先跳转到编辑器
+  window.location.hash = `editor/${id}`;
 }
 
 async function deletePost(id: string) {

@@ -45,13 +45,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, shallowRef } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, shallowRef } from 'vue';
 import { darkTheme } from 'naive-ui';
 import DashboardView from './views/Dashboard.vue';
 import PostsView from './views/Posts.vue';
 import AccountsView from './views/Accounts.vue';
 import TasksView from './views/Tasks.vue';
 import SettingsView from './views/Settings.vue';
+import EditorView from './views/Editor.vue';
 
 const isDark = ref(false);
 const theme = computed(() => isDark.value ? darkTheme : null);
@@ -71,22 +72,46 @@ const components: Record<string, any> = {
   accounts: AccountsView,
   tasks: TasksView,
   settings: SettingsView,
+  editor: EditorView,
 };
 
 const currentComponent = shallowRef(DashboardView);
 
 onMounted(() => {
-  // 从 hash 读取路由
-  const hash = window.location.hash.slice(1);
-  if (hash && components[hash]) {
-    navigate(hash);
-  }
+  updateRouteFromHash();
+  window.addEventListener('hashchange', updateRouteFromHash);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', updateRouteFromHash);
 });
 
 function navigate(path: string) {
   currentPath.value = path;
   currentComponent.value = components[path] || DashboardView;
   window.location.hash = path;
+}
+
+function updateRouteFromHash() {
+  const raw = window.location.hash.slice(1);
+  const hash = raw.startsWith('/') ? raw.slice(1) : raw;
+  if (!hash) {
+    navigate('dashboard');
+    return;
+  }
+  // 支持 editor/<id>
+  if (hash.startsWith('editor/')) {
+    currentPath.value = 'editor';
+    currentComponent.value = EditorView;
+    return;
+  }
+  if (components[hash]) {
+    currentPath.value = hash;
+    currentComponent.value = components[hash];
+    return;
+  }
+  // 默认
+  navigate('dashboard');
 }
 
 function toggleTheme() {

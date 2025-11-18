@@ -16,13 +16,17 @@ export type PlatformId =
 export interface AssetRef {
   id: string;
   type: 'image' | 'video' | 'file';
-  name: string;
-  mime: string;
-  size: number;
+  url: string;
+  alt?: string;
+  title?: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
   blobUrl?: string;
   hash?: string;
   variants?: Record<string, string>;
-  createdAt: number;
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -30,7 +34,7 @@ export interface AssetRef {
  */
 export interface CanonicalPost {
   id: string;
-  version: number;
+  version?: number;
   title: string;
   slug?: string;
   summary?: string;
@@ -38,8 +42,12 @@ export interface CanonicalPost {
   tags?: string[];
   categories?: string[];
   canonicalUrl?: string;
-  createdAt: number;
-  updatedAt: number;
+  source_url?: string;
+  collected_at?: string;
+  created_at?: string;
+  updated_at?: string;
+  createdAt?: number;
+  updatedAt?: number;
   body_md: string;
   assets?: AssetRef[];
   meta?: Record<string, any>;

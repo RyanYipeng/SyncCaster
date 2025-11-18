@@ -1,22 +1,57 @@
 /**
- * Content Script
- * 在平台发布页面注入，执行 DOM 自动化或内容采集
+ * Content Script - 优化版
+ * 注入到目标网站，执行 DOM 自动化和内容采集
+ * 支持：公式提取、图片归一化、表格/代码块保真、质量校验
  */
+import TurndownService from 'turndown';
+import { gfm } from 'turndown-plugin-gfm';
+import { Readability } from '@mozilla/readability';
+import {
+  computeMetrics,
+  extractFormulas,
+  flattenCodeHighlights,
+  cleanDOMWithWhitelist,
+  extractAndNormalizeImages,
+  checkQuality,
+  type CollectedImage,
+  type ContentMetrics,
+} from './collector-utils';
 
-import { Logger } from '@synccaster/utils';
+// 采集配置
+const COLLECT_CONFIG = {
+  readability: {
+    keepClasses: true,
+    maxElemsToParse: 10000,
+    nbTopCandidates: 10,
+  },
+  images: {
+    maxSize: 10 * 1024 * 1024, // 10MB
+    maxCount: 100,
+  },
+  quality: {
+    images: 0.3, // 图片丢失超30%则回退
+    formulas: 0.5,
+    tables: 0.5,
+  },
+};
 
-const logger = new Logger('content-script');
+function logInfo(scope: string, msg: string, extra?: any) {
+  // 简易日志，避免外部依赖
+  try {
+    console.log(`[content:${scope}] ${msg}`, extra ?? '');
+  } catch {}
+}
 
-logger.info('init', `Content script loaded on ${window.location.href}`);
+logInfo('init', 'Content script loaded', { url: window.location.href });
 
 // 监听来自 background 的消息
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  logger.debug('message', `Received message: ${message.type}`);
+chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
+  logInfo('message', 'Received message', { type: message.type });
   
   handleMessage(message)
     .then(sendResponse)
     .catch((error) => {
-      logger.error('message', 'Message handling failed', { error });
+      logInfo('message', 'Message handling failed', { error });
       sendResponse({ error: error.message });
     });
   
@@ -43,51 +78,143 @@ async function handleMessage(message: any) {
 }
 
 /**
- * 采集当前页面内容
+ * 采集当前页面内容 - 优化版
  */
-async function collectContent() {
-  logger.info('collect', 'Collecting content from page');
-  
+async function collectContent(options = {}) {
   try {
-    // 使用 Readability 提取文章内容
-    // TODO: 集成 @mozilla/readability
-    
-    const title = document.title;
+    logInfo('collect', '开始采集页面内容', { url: window.location.href });
+
     const url = window.location.href;
-    
-    // 简单提取（实际应使用 Readability）
-    const contentElement = 
-      document.querySelector('article') ||
-      document.querySelector('[role="main"]') ||
-      document.querySelector('.content') ||
-      document.body;
-    
-    const content = contentElement?.textContent || '';
-    
-    // 提取图片
-    const images = Array.from(document.querySelectorAll('img'))
-      .map((img) => ({
-        src: img.src,
-        alt: img.alt,
-        width: img.naturalWidth,
-        height: img.naturalHeight,
-      }))
-      .filter((img) => img.width > 100 && img.height > 100); // 过滤小图标
-    
-    logger.info('collect', `Collected content: ${title}`, {
-      contentLength: content.length,
-      imageCount: images.length,
+
+    // ========== 步骤1: Readability 提取（增强配置） ==========
+    const cloned = document.cloneNode(true) as Document;
+    const article = new Readability(cloned, COLLECT_CONFIG.readability).parse();
+
+    const getMainContainer = () =>
+      (document.querySelector('article') as HTMLElement)
+      || (document.querySelector('[role="main"]') as HTMLElement)
+      || (document.querySelector('.content') as HTMLElement)
+      || document.body;
+
+    const origContainer = getMainContainer();
+    const orig_html = origContainer?.innerHTML || '';
+
+    let title = document.title || '未命名标题';
+    const read_html = article?.content || '';
+    if (article?.title) title = article.title;
+
+    // 计算初始指标（用于后续质量校验）
+    const initialMetrics = computeMetrics(orig_html);
+    logInfo('collect', '初始内容指标', initialMetrics);
+
+    // 选择更优 HTML
+    const mRead = computeMetrics(read_html);
+    const mOrig = computeMetrics(orig_html);
+    let body_html = (mOrig.images > mRead.images
+      || (mOrig.images === mRead.images && mOrig.textLen > mRead.textLen))
+      ? orig_html
+      : read_html || orig_html;
+
+    // ========== 步骤2: DOM 预处理（白名单清洗 + 公式/图片提取） ==========
+    const container = document.createElement('div');
+    container.innerHTML = body_html;
+
+    // 2.1 公式抽取与占位
+    const formulas = extractFormulas(container);
+    logInfo('collect', '提取公式', { count: formulas.length });
+
+    // 2.2 代码块高亮去壳
+    flattenCodeHighlights(container);
+
+    // 2.3 白名单清洗（保留关键结构）
+    cleanDOMWithWhitelist(container);
+
+    // 2.4 图片归一化（增强版）
+    const images = extractAndNormalizeImages(container);
+    logInfo('collect', '提取图片', { count: images.length });
+
+    // ========== 步骤3: Turndown 转换（含自定义规则） ==========
+    body_html = container.innerHTML;
+    const td = new TurndownService({
+      headingStyle: 'atx',
+      codeBlockStyle: 'fenced',
+      emDelimiter: '_',
+      bulletListMarker: '-',
+      br: '\n',
     });
-    
-    return {
+    td.use(gfm);
+
+    // 自定义规则：公式
+    td.addRule('sync-math', {
+      filter: (node: any) => node.nodeType === 1 && (node as Element).hasAttribute('data-sync-math'),
+      replacement: (_content: any, node: any) => {
+        const el = node as Element;
+        const tex = el.getAttribute('data-tex') || '';
+        const display = el.getAttribute('data-display') === 'true';
+        return display ? `\n\n$$\n${tex}\n$$\n\n` : `$${tex}$`;
+      },
+    });
+
+    // 自定义规则：复杂表格保留HTML
+    td.addRule('complex-table', {
+      filter: (node: any) => {
+        if (node.nodeName !== 'TABLE') return false;
+        const el = node as HTMLTableElement;
+        return !!el.querySelector('colgroup, [colspan], [rowspan]');
+      },
+      replacement: (_content: any, node: any) => `\n\n${(node as Element).outerHTML}\n\n`,
+    });
+
+    const body_md = td.turndown(body_html || '');
+    const text_len = (body_md || '').length;
+    const summary = (container.textContent || '').trim().slice(0, 200);
+
+    // ========== 步骤4: 质量校验与回退 ==========
+    const finalMetrics = computeMetrics(body_html);
+    const qualityCheck = checkQuality(
+      initialMetrics,
+      finalMetrics,
+      COLLECT_CONFIG.quality
+    );
+
+    logInfo('collect', '质量校验', qualityCheck);
+
+    const useHtmlFallback = !qualityCheck.pass;
+    if (useHtmlFallback) {
+      logInfo('collect', '质量不达标，启用HTML回退模式', { reason: qualityCheck.reason });
+    }
+
+    logInfo('collect', '采集成功', {
       title,
-      url,
-      content: content.substring(0, 1000), // 限制长度
-      images,
+      len: text_len,
+      images: images.length,
+      formulas: formulas.length,
+      quality: qualityCheck.pass ? 'pass' : 'fallback',
+    });
+
+    return {
+      success: true,
+      data: {
+        title,
+        url,
+        summary,
+        body_md,
+        body_html,
+        images,
+        formulas,
+        wordCount: text_len,
+        imageCount: images.length,
+        formulaCount: formulas.length,
+        useHtmlFallback,
+        qualityCheck,
+      },
     };
   } catch (error: any) {
-    logger.error('collect', 'Content collection failed', { error });
-    throw error;
+    logInfo('collect', '采集异常', { error });
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '未知错误',
+    };
   }
 }
 
@@ -98,7 +225,7 @@ async function fillAndPublish(data: {
   platform: string;
   payload: any;
 }) {
-  logger.info('publish', `Filling and publishing to ${data.platform}`);
+  logInfo('publish', `Filling and publishing to ${data.platform}`);
   
   const { platform, payload } = data;
   
@@ -122,7 +249,7 @@ async function fillAndPublish(data: {
  * 微信公众号发布
  */
 async function publishToWechat(payload: any) {
-  logger.info('wechat', 'Publishing to WeChat');
+  logInfo('wechat', 'Publishing to WeChat');
   
   // TODO: 实现微信 DOM 自动化
   // 1. 等待编辑器加载
@@ -141,7 +268,7 @@ async function publishToWechat(payload: any) {
  * 知乎发布
  */
 async function publishToZhihu(payload: any) {
-  logger.info('zhihu', 'Publishing to Zhihu');
+  logInfo('zhihu', 'Publishing to Zhihu');
   
   // TODO: 实现知乎 DOM 自动化
   
@@ -155,7 +282,7 @@ async function publishToZhihu(payload: any) {
  * 掘金发布
  */
 async function publishToJuejin(payload: any) {
-  logger.info('juejin', 'Publishing to Juejin');
+  logInfo('juejin', 'Publishing to Juejin');
   
   // TODO: 实现掘金 DOM 自动化
   
@@ -186,7 +313,7 @@ function addFloatingButton() {
   `;
   
   button.addEventListener('click', async () => {
-    logger.info('button', 'Quick action button clicked');
+    logInfo('button', 'Quick action button clicked');
     
     try {
       button.textContent = '⏳ 采集中...';
@@ -207,7 +334,7 @@ function addFloatingButton() {
         button.disabled = false;
       }, 2000);
     } catch (error: any) {
-      logger.error('button', 'Quick action failed', { error });
+      logInfo('button', 'Quick action failed', { error });
       button.textContent = '❌ 失败';
       button.disabled = false;
     }

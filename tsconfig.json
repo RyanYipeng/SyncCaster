@@ -13,7 +13,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "preserve",
-    "types": ["vite/client", "chrome"],
+    "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
       "@synccaster/core": ["./packages/core/src"],

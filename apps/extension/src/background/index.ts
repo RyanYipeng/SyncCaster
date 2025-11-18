@@ -69,6 +69,56 @@ async function initializeDatabase() {
 }
 
 /**
+ * 保存采集的文章到数据库
+ */
+async function saveCollectedPost(data: any) {
+  try {
+    const now = Date.now();
+    const id = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
+      ? crypto.randomUUID()
+      : `${now}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const assets = Array.isArray(data?.images)
+      ? data.images.map((img: any, idx: number) => ({
+          id: `${id}-img-${idx}`,
+          type: 'image',
+          url: img?.url || '',
+          alt: img?.alt || undefined,
+          title: img?.title || undefined,
+          width: img?.width || undefined,
+          height: img?.height || undefined,
+        }))
+      : [];
+
+    const post = {
+      id,
+      version: 1,
+      title: data?.title || '未命名标题',
+      summary: data?.summary || '',
+      canonicalUrl: data?.url || '',
+      createdAt: now,
+      updatedAt: now,
+      body_md: data?.body_md || '',
+      tags: [],
+      categories: [],
+      assets,
+      meta: {
+        source_url: data?.url || '',
+        collected_at: new Date(now).toISOString(),
+        body_html: data?.body_html || '',
+      },
+    } as any;
+
+    await db.posts.add(post);
+    logger.info('db', 'Post saved', { id: post.id, title: post.title, len: post.body_md?.length || 0 });
+    return { success: true, postId: post.id };
+  } catch (error: any) {
+    logger.error('db', 'Save post failed', { error });
+    return { success: false, error: error?.message || 'Save failed' };
+  }
+}
+
+/**
  * 处理消息
  */
 async function handleMessage(message: any, sender: chrome.runtime.MessageSender) {
@@ -91,6 +141,29 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
         return await collectContentFromTab(sender.tab.id);
       }
       throw new Error('No tab context');
+
+    case 'SAVE_POST':
+      // 保存采集结果到本地数据库
+      return await saveCollectedPost(message.data);
+
+    case 'CONTENT_COLLECTED':
+      // 内容采集完成的通知
+      logger.info('collect', 'Content collected successfully', message.data);
+      
+      let saved: any = { success: false };
+      if (message.data?.success && message.data?.data) {
+        // 保存文章
+        saved = await saveCollectedPost(message.data.data);
+        
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'assets/icon-48.png',
+          title: saved.success ? '采集成功并已保存' : '采集成功但保存失败',
+          message: `文章：${message.data.data?.title || '未知标题'}`,
+        });
+      }
+      
+      return { received: true, saved };
     
     default:
       throw new Error(`Unknown message type: ${message.type}`);
