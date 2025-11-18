@@ -1,42 +1,67 @@
 <template>
   <n-config-provider :theme="theme">
     <n-message-provider>
-      <div class="min-h-screen bg-gray-50">
+      <div class="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 relative">
+        <!-- 装饰性背景 -->
+        <div class="fixed top-0 right-0 w-96 h-96 bg-blue-100 rounded-full opacity-10 -translate-y-48 translate-x-48 blur-3xl pointer-events-none"></div>
+        <div class="fixed bottom-0 left-0 w-96 h-96 bg-purple-100 rounded-full opacity-10 translate-y-48 -translate-x-48 blur-3xl pointer-events-none"></div>
+        
         <!-- 头部 -->
-        <header class="bg-white border-b border-gray-200 px-6 py-4">
-          <div class="flex-between max-w-7xl mx-auto">
-            <div class="flex items-center gap-4">
-              <h1 class="text-2xl font-bold text-gray-800">SyncCaster</h1>
-              <span class="text-sm text-gray-500">v2.0.0</span>
-            </div>
-            <div class="flex items-center gap-4">
-              <n-button text @click="toggleTheme">
-                {{ isDark ? '🌙' : '☀️' }}
-              </n-button>
+        <header class="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-200/50 shadow-sm">
+          <div class="max-w-7xl mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-4 select-none">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+                  <span class="text-white text-xl">✨</span>
+                </div>
+                <div>
+                  <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">SyncCaster</h1>
+                  <p class="text-xs text-gray-500">v2.0.0 · 内容采集与发布助手</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-3">
+                <button
+                  @click="toggleTheme"
+                  class="w-10 h-10 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors flex items-center justify-center text-xl"
+                  :title="isDark ? '切换到亮色模式' : '切换到暗色模式'"
+                >
+                  {{ isDark ? '🌙' : '☀️' }}
+                </button>
+              </div>
             </div>
           </div>
         </header>
 
-        <div class="max-w-7xl mx-auto flex">
+        <div class="max-w-7xl mx-auto flex relative">
           <!-- 侧边栏 -->
-          <aside class="w-64 bg-white border-r border-gray-200 min-h-[calc(100vh-73px)]">
-            <nav class="p-4">
+          <aside class="w-64 min-h-[calc(100vh-89px)] sticky top-[89px]">
+            <nav class="p-4 space-y-1">
               <div
                 v-for="item in navItems"
                 :key="item.path"
-                class="px-4 py-2 rounded cursor-pointer hover:bg-gray-100 mb-1"
-                :class="{ 'bg-blue-50 text-blue-600': currentPath === item.path }"
+                class="group relative px-4 py-3 rounded-xl cursor-pointer select-none transition-all duration-300"
+                :class="currentPath === item.path 
+                  ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/30' 
+                  : 'hover:bg-white/60 text-gray-700 hover:text-gray-900'"
                 @click="navigate(item.path)"
               >
-                <span class="mr-2">{{ item.icon }}</span>
-                {{ item.label }}
+                <div class="flex items-center gap-3">
+                  <span class="text-xl transition-transform group-hover:scale-110">{{ item.icon }}</span>
+                  <span class="font-medium">{{ item.label }}</span>
+                </div>
+                <div 
+                  v-if="currentPath === item.path"
+                  class="absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 rounded-xl blur opacity-30 -z-10"
+                ></div>
               </div>
             </nav>
           </aside>
 
           <!-- 主内容区 -->
-          <main class="flex-1 p-6">
-            <component :is="currentComponent" />
+          <main class="flex-1 p-6 min-h-[calc(100vh-89px)]">
+            <div class="bg-white/60 backdrop-blur-sm rounded-2xl shadow-sm border border-gray-100 p-6">
+              <component :is="currentComponent" />
+            </div>
           </main>
         </div>
       </div>
@@ -118,3 +143,11 @@ function toggleTheme() {
   isDark.value = !isDark.value;
 }
 </script>
+
+<style scoped>
+/* 确保渐变文字显示正确 */
+.bg-clip-text {
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+</style>

@@ -9,6 +9,19 @@ import { Logger } from '@synccaster/utils';
 
 const logger = new Logger('background');
 
+// 动态导入 v2.0 处理器，避免阻塞启动
+let processCollectedHTML: any = null;
+try {
+  import('./content-processor-v2').then((module) => {
+    processCollectedHTML = module.processCollectedHTML;
+    logger.info('v2', 'v2.0 processor loaded successfully');
+  }).catch((error) => {
+    logger.warn('v2', 'Failed to load v2.0 processor, will use v1.0 only', { error: error.message });
+  });
+} catch (error: any) {
+  logger.warn('v2', 'v2.0 processor import failed', { error: error.message });
+}
+
 // 监听扩展安装
 chrome.runtime.onInstalled.addListener(async (details) => {
   logger.info('install', `Extension installed: ${details.reason}`);
@@ -69,7 +82,7 @@ async function initializeDatabase() {
 }
 
 /**
- * 保存采集的文章到数据库
+ * 保存采集的文章到数据库（v2.0 增强版）
  */
 async function saveCollectedPost(data: any) {
   try {
@@ -78,7 +91,57 @@ async function saveCollectedPost(data: any) {
       ? crypto.randomUUID()
       : `${now}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const assets = Array.isArray(data?.images)
+    let v2Enhanced = null;
+    
+    // 🚀 尝试使用 v2.0 处理器增强内容（如果可用）
+    if (data?.body_html && processCollectedHTML) {
+      logger.info('v2', 'Processing content with v2.0 pipeline');
+      
+      try {
+        const v2Result = await processCollectedHTML(
+          data.body_html,
+          { 
+            title: data.title || '未命名标题', 
+            url: data.url || '' 
+          },
+          {
+            downloadImages: true,
+            platforms: ['juejin', 'csdn', 'zhihu', 'wechat'],
+            onProgress: (stage: string, progress: number) => {
+              logger.debug('v2-progress', `${stage}: ${(progress * 100).toFixed(0)}%`);
+            },
+          }
+        );
+
+        if (v2Result.success && v2Result.data) {
+          v2Enhanced = v2Result.data;
+          logger.info('v2', 'v2.0 processing successful', {
+            imageCount: v2Enhanced.manifest.images.length,
+            formulaCount: v2Enhanced.manifest.formulas.length,
+            platforms: Object.keys(v2Enhanced.adaptedContent).length,
+          });
+        }
+      } catch (error: any) {
+        logger.warn('v2', 'v2.0 processing failed, falling back to v1.0', { error: error.message });
+      }
+    } else if (data?.body_html && !processCollectedHTML) {
+      logger.info('v2', 'v2.0 processor not loaded, using v1.0');
+    }
+
+    // 构建资产列表（优先使用 v2.0 的增强数据）
+    const assets = v2Enhanced?.manifest.images.map((img: any, idx: number) => ({
+      id: `${id}-img-${idx}`,
+      type: 'image',
+      url: img.proxyUrl || img.originalUrl,
+      alt: img.metadata?.alt,
+      title: img.metadata?.title,
+      width: img.metadata?.width,
+      height: img.metadata?.height,
+      hash: img.id,
+      variants: img.optimized ? {
+        webp: img.optimized.webp?.url,
+      } : undefined,
+    })) || (Array.isArray(data?.images)
       ? data.images.map((img: any, idx: number) => ({
           id: `${id}-img-${idx}`,
           type: 'image',
@@ -88,17 +151,19 @@ async function saveCollectedPost(data: any) {
           width: img?.width || undefined,
           height: img?.height || undefined,
         }))
-      : [];
+      : []);
 
     const post = {
       id,
-      version: 1,
+      version: v2Enhanced ? 2 : 1, // 标记版本
       title: data?.title || '未命名标题',
-      summary: data?.summary || '',
+      summary: v2Enhanced?.metadata ? 
+        (data.summary || `${v2Enhanced.metadata.wordCount} 字，${v2Enhanced.metadata.imageCount} 图`) :
+        (data?.summary || ''),
       canonicalUrl: data?.url || '',
       createdAt: now,
       updatedAt: now,
-      body_md: data?.body_md || '',
+      body_md: v2Enhanced?.markdown || data?.body_md || '',
       tags: [],
       categories: [],
       assets,
@@ -106,12 +171,34 @@ async function saveCollectedPost(data: any) {
         source_url: data?.url || '',
         collected_at: new Date(now).toISOString(),
         body_html: data?.body_html || '',
+        // v2.0 增强数据
+        ...(v2Enhanced ? {
+          v2: {
+            ast: v2Enhanced.ast,
+            manifest: v2Enhanced.manifest,
+            adaptedContent: v2Enhanced.adaptedContent,
+            metadata: v2Enhanced.metadata,
+          },
+        } : {}),
       },
     } as any;
 
     await db.posts.add(post);
-    logger.info('db', 'Post saved', { id: post.id, title: post.title, len: post.body_md?.length || 0 });
-    return { success: true, postId: post.id };
+    
+    logger.info('db', 'Post saved', { 
+      id: post.id, 
+      title: post.title, 
+      version: post.version,
+      len: post.body_md?.length || 0,
+      images: assets.length,
+      v2Enhanced: !!v2Enhanced,
+    });
+    
+    return { 
+      success: true, 
+      postId: post.id,
+      v2Enhanced: !!v2Enhanced,
+    };
   } catch (error: any) {
     logger.error('db', 'Save post failed', { error });
     return { success: false, error: error?.message || 'Save failed' };
@@ -144,7 +231,15 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
 
     case 'SAVE_POST':
       // 保存采集结果到本地数据库
-      return await saveCollectedPost(message.data);
+      logger.info('save', 'Saving post', { title: message.data?.title });
+      try {
+        const result = await saveCollectedPost(message.data);
+        logger.info('save', 'Save result', result);
+        return result;
+      } catch (error: any) {
+        logger.error('save', 'Save failed', { error });
+        return { success: false, error: error.message };
+      }
 
     case 'CONTENT_COLLECTED':
       // 内容采集完成的通知

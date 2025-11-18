@@ -9,10 +9,26 @@
     "./db": "./src/db/index.ts"
   },
   "dependencies": {
-    "dexie": "^3.2.4",
-    "nanoid": "^5.0.4",
     "@mozilla/readability": "^0.5.0",
+    "dexie": "^3.2.4",
+    "hast-util-to-text": "^4.0.2",
+    "mdast-util-to-string": "^4.0.0",
+    "nanoid": "^5.0.4",
+    "rehype-katex": "^7.0.1",
+    "rehype-parse": "^9.0.1",
+    "rehype-remark": "^10.0.1",
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "remark-rehype": "^11.1.2",
+    "remark-stringify": "^11.0.0",
     "turndown": "^7.2.0",
-    "turndown-plugin-gfm": "^1.0.2"
+    "turndown-plugin-gfm": "^1.0.2",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/hast": "^3.0.4",
+    "@types/mdast": "^4.0.4"
   }
 }

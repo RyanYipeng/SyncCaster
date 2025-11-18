@@ -171,3 +171,8 @@ export interface AppConfig {
   value: any;
   updatedAt: number;
 }
+
+// 导出其他模块
+export * from './platforms';
+export * from './adapter';
+export * from './ast';
