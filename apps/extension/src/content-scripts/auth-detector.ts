@@ -440,73 +440,77 @@ const wechatDetector: PlatformAuthDetector = {
   urlPatterns: [/mp\.weixin\.qq\.com/],
   async checkLogin(): Promise<LoginState> {
     log('wechat', '检测登录状态...');
-    
-    // 检查是否在登录页面
     const url = window.location.href;
-    if (url.includes('login') || url.includes('scanlogin')) {
-      log('wechat', '当前在登录页面');
-      return { loggedIn: false, platform: 'wechat' };
-    }
+    log('wechat', '当前 URL: ' + url);
+    log('wechat', '页面标题: ' + document.title);
     
-    // 方法1: 检查 DOM 中的账号信息
-    const nicknameSelectors = [
-      '.weui-desktop-account__nickname',
-      '.account_nickname',
-      '.weui-desktop-account-nickname',
-      '.nickname',
-    ];
-    
-    for (const selector of nicknameSelectors) {
-      const el = document.querySelector(selector);
-      if (el?.textContent?.trim()) {
-        const avatarEl = document.querySelector('.weui-desktop-account__avatar img, .account_avatar img') as HTMLImageElement;
-        log('wechat', '从 DOM 检测到登录状态', { selector });
-        return {
-          loggedIn: true,
-          platform: 'wechat',
-          nickname: el.textContent.trim(),
-          avatar: avatarEl?.src,
-        };
+    // 检查是否在登录页面（优先判断）
+    if (url.includes('/cgi-bin/loginpage') || url.includes('action=scanlogin') || 
+        url.includes('/cgi-bin/bizlogin') || url === 'https://mp.weixin.qq.com/' ||
+        url === 'https://mp.weixin.qq.com') {
+      // 但如果 URL 中有 token 参数，说明已登录
+      if (!url.includes('token=')) {
+        log('wechat', '当前在登录页面（无 token）');
+        return { loggedIn: false, platform: 'wechat' };
       }
     }
     
-    // 方法2: 检查全局变量
-    const win = window as any;
-    if (win.wx?.data?.user_name || win.cgiData?.nick_name) {
-      log('wechat', '从全局变量检测到登录状态');
+    // 方法1（最可靠）: 检查 URL 中是否有 token 参数
+    // 微信公众号后台的所有页面都会带 token 参数
+    const tokenMatch = url.match(/token=(\d+)/);
+    if (tokenMatch && tokenMatch[1]) {
+      log('wechat', '从 URL token 参数判断已登录: token=' + tokenMatch[1]);
+      // 尝试获取昵称
+      let nickname = '微信公众号';
+      
+      // 尝试从 DOM 获取昵称
+      const nicknameSelectors = [
+        '.weui-desktop-account__nickname',
+        '.account_nickname', 
+        '.nickname',
+        '.user-name',
+        '.mp-account-name',
+        '.account-name',
+        '[class*="account"] [class*="name"]',
+      ];
+      
+      for (const selector of nicknameSelectors) {
+        try {
+          const el = document.querySelector(selector);
+          if (el?.textContent?.trim() && !el.textContent.includes('登录')) {
+            nickname = el.textContent.trim();
+            log('wechat', '从 DOM 获取到昵称: ' + nickname);
+            break;
+          }
+        } catch {}
+      }
+      
+      // 尝试从页面标题获取昵称
+      if (nickname === '微信公众号') {
+        const title = document.title;
+        if (title && !title.includes('登录')) {
+          const match = title.match(/^(.+?)\s*[-–—]\s*微信公众平台/);
+          if (match && match[1].trim().length > 0) {
+            nickname = match[1].trim();
+            log('wechat', '从页面标题获取到昵称: ' + nickname);
+          }
+        }
+      }
+      
+      const avatarEl = document.querySelector('.weui-desktop-account__avatar img, .account_avatar img, [class*="avatar"] img') as HTMLImageElement;
       return {
         loggedIn: true,
         platform: 'wechat',
-        nickname: win.wx?.data?.user_name || win.cgiData?.nick_name,
+        nickname: nickname,
+        avatar: avatarEl?.src,
       };
     }
     
-    // 方法3: 检查页面标题（登录后标题通常包含公众号名称）
-    const title = document.title;
-    if (title && !title.includes('登录') && !title.includes('微信公众平台') && title.length > 0) {
-      // 可能是 "XXX - 微信公众平台" 格式
-      const match = title.match(/^(.+?)\s*[-–—]\s*微信公众平台/);
-      if (match) {
-        log('wechat', '从页面标题检测到登录状态');
-        return {
-          loggedIn: true,
-          platform: 'wechat',
-          nickname: match[1].trim(),
-        };
-      }
-    }
-    
-    // 方法4: 检查登录表单是否存在
-    const loginForm = document.querySelector('.login__type__container, .login_frame, .weui-desktop-login');
-    if (loginForm) {
-      log('wechat', '检测到登录表单，未登录');
-      return { loggedIn: false, platform: 'wechat' };
-    }
-    
-    // 方法5: 检查是否有后台管理菜单（登录后才有）
-    const menuEl = document.querySelector('.weui-desktop-sidebar, .menu_list, .main_bd');
-    if (menuEl) {
-      log('wechat', '检测到后台菜单，已登录');
+    // 方法2: 检查 URL 路径判断是否在后台（即使没有 token 参数）
+    if (url.includes('/cgi-bin/home') || url.includes('/cgi-bin/frame') || 
+        url.includes('/cgi-bin/message') || url.includes('/cgi-bin/appmsg') ||
+        url.includes('/cgi-bin/operate_appmsg') || url.includes('/cgi-bin/settingpage')) {
+      log('wechat', '从 URL 路径判断已登录');
       return {
         loggedIn: true,
         platform: 'wechat',
@@ -514,6 +518,99 @@ const wechatDetector: PlatformAuthDetector = {
       };
     }
     
+    // 方法3: 检查 Cookie 中是否有登录标记
+    try {
+      const cookies = document.cookie;
+      log('wechat', 'Cookie 内容: ' + cookies.substring(0, 200));
+      // 微信公众号登录后会有 slave_sid 或 data_ticket
+      if (cookies.includes('slave_sid=') || cookies.includes('data_ticket=') || cookies.includes('bizuin=')) {
+        log('wechat', '从 Cookie 检测到登录状态');
+        return {
+          loggedIn: true,
+          platform: 'wechat',
+          nickname: '微信公众号',
+        };
+      }
+    } catch (e) {
+      log('wechat', 'Cookie 检查失败: ' + e);
+    }
+    
+    // 方法4: 检查是否有后台管理菜单（登录后才有）
+    const menuSelectors = [
+      '.weui-desktop-sidebar',
+      '.menu_list',
+      '.main_bd',
+      '.new-home__container',
+      '.home-container',
+      '#app .weui-desktop-layout',
+      '.weui-desktop-layout__body',
+      '.weui-desktop-panel',
+      '.new-creation__menu',
+    ];
+    
+    for (const selector of menuSelectors) {
+      const el = document.querySelector(selector);
+      if (el) {
+        log('wechat', '检测到后台菜单，已登录: ' + selector);
+        const nameEl = document.querySelector('[class*="name"], [class*="nickname"]');
+        return {
+          loggedIn: true,
+          platform: 'wechat',
+          nickname: nameEl?.textContent?.trim() || '微信公众号',
+        };
+      }
+    }
+    
+    // 方法5: 检查全局变量
+    const win = window as any;
+    log('wechat', '检查全局变量...');
+    const possibleUserVars = [
+      { name: 'wx.data.user_name', value: win.wx?.data?.user_name },
+      { name: 'cgiData.nick_name', value: win.cgiData?.nick_name },
+      { name: 'cgiData.nickname', value: win.cgiData?.nickname },
+      { name: '__INITIAL_DATA__.nickName', value: win.__INITIAL_DATA__?.nickName },
+      { name: 'pageData.nickName', value: win.pageData?.nickName },
+    ];
+    
+    for (const { name, value } of possibleUserVars) {
+      if (value && typeof value === 'string' && value.length > 0) {
+        log('wechat', '从全局变量检测到登录状态: ' + name + ' = ' + value);
+        return {
+          loggedIn: true,
+          platform: 'wechat',
+          nickname: value,
+        };
+      }
+    }
+    
+    // 方法6: 检查登录表单是否存在（如果存在则未登录）
+    const loginFormSelectors = [
+      '.login__type__container',
+      '.login_frame',
+      '.weui-desktop-login',
+      '.login-box',
+      '#login_container',
+      '.qrcode-login',
+      '.login__type__container__scan',
+    ];
+    
+    for (const selector of loginFormSelectors) {
+      const el = document.querySelector(selector);
+      if (el) {
+        log('wechat', '检测到登录表单，未登录: ' + selector);
+        return { loggedIn: false, platform: 'wechat' };
+      }
+    }
+    
+    // 打印调试信息
+    const allElements = document.querySelectorAll('[class*="account"], [class*="nickname"], [class*="user"], [class*="avatar"]');
+    log('wechat', '找到 ' + allElements.length + ' 个可能的用户相关元素');
+    if (allElements.length > 0) {
+      const classNames = Array.from(allElements).slice(0, 5).map(el => el.className);
+      log('wechat', '元素类名: ' + classNames.join(', '));
+    }
+    
+    log('wechat', '未能确定登录状态，默认未登录');
     return { loggedIn: false, platform: 'wechat' };
   },
 };
