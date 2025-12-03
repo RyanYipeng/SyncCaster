@@ -55,6 +55,11 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
         js: ['src/content-scripts/index.ts'],
         run_at: 'document_idle',
       },
+      {
+        matches: ['https://juejin.cn/editor/drafts/*'],
+        js: ['src/content-scripts/juejin-image-paste.ts'],
+        run_at: 'document_idle',
+      },
     ],
 
     // 权限
@@ -68,6 +73,8 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
       'downloads',
       'activeTab',
       'cookies',  // ✨ 必需：读取 Cookie 以检测登录状态
+      'clipboardRead',
+      'clipboardWrite',
     ],
 
     // 主机权限（全部12个平台）
@@ -203,6 +210,8 @@ const manifest = {
     'downloads',
     'activeTab',
     'cookies',  // ✨ 必需：读取 Cookie 以检测登录状态
+    'clipboardRead',
+    'clipboardWrite',
   ],
 
   // 主机权限（全部12个平台）

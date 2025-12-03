@@ -29,12 +29,11 @@ export const juejinAdapter: PlatformAdapter = {
     },
   },
 
-  async ensureAuth({ account }) {
+  async ensureAuth() {
     return { type: 'cookie', valid: true };
   },
 
-  async transform(post, { config }) {
-    // 掘金支持标准 Markdown + LaTeX，无需特殊转换
+  async transform(post) {
     return {
       title: post.title,
       contentMarkdown: post.body_md,
@@ -46,18 +45,17 @@ export const juejinAdapter: PlatformAdapter = {
     };
   },
 
-  async publish(payload, ctx) {
+  async publish() {
     throw new Error('juejin: use DOM automation');
   },
 
   dom: {
-    // 第一个必须是具体 URL（用于 chrome.tabs.create）
-    matchers: [
-      'https://juejin.cn/editor/drafts/new?v=2',
-    ],
+    matchers: ['https://juejin.cn/editor/drafts/new?v=2'],
     fillAndPublish: function(payload: any): Promise<{ url: string }> {
-      // 使用纯 JavaScript 风格函数（避免 TypeScript 类型注解在注入时的问题）
       console.log('[juejin] fillAndPublish starting', payload);
+      
+      const downloadedImages = payload.__downloadedImages || [];
+      console.log('[juejin] 收到下载的图片:', downloadedImages.length);
       
       function sleep(ms: number): Promise<void> {
         return new Promise(function(resolve) { setTimeout(resolve, ms); });
@@ -80,7 +78,7 @@ export const juejinAdapter: PlatformAdapter = {
           check();
         });
       }
-
+      
       return (async function() {
         try {
           // 1. 填充标题
@@ -90,35 +88,103 @@ export const juejinAdapter: PlatformAdapter = {
           titleInput.dispatchEvent(new Event('input', { bubbles: true }));
           await sleep(300);
 
-          // 2. 填充内容 - 掘金使用 bytemd 编辑器
-          console.log('[juejin] Step 2: 填充内容');
-          const markdown = payload.contentMarkdown || '';
+          // 2. 处理图片和内容
+          console.log('[juejin] Step 2: 处理图片和内容');
+          let markdown = payload.contentMarkdown || '';
+          const imageUrlMap = new Map<string, string>();
           
-          // 尝试找到 bytemd 的 textarea
-          const bytemdTextarea = document.querySelector('.bytemd-editor textarea, .CodeMirror textarea') as HTMLTextAreaElement | null;
-          if (bytemdTextarea) {
-            bytemdTextarea.focus();
-            bytemdTextarea.value = markdown;
-            bytemdTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-          } else {
-            // 尝试 CodeMirror
-            const cm = document.querySelector('.CodeMirror') as any;
-            if (cm && cm.CodeMirror) {
-              cm.CodeMirror.setValue(markdown);
+          // 如果有下载的图片，通过 DOM 粘贴方式上传
+          if (downloadedImages.length > 0) {
+            console.log('[juejin] Step 2.1: 通过粘贴上传图片到掘金');
+            await sleep(1000);
+            
+            const cmElement = document.querySelector('.CodeMirror') as any;
+            if (!cmElement || !cmElement.CodeMirror) {
+              console.warn('[juejin] 未找到 CodeMirror 编辑器，跳过图片上传');
             } else {
-              throw new Error('未找到掘金编辑器');
+              const cm = cmElement.CodeMirror;
+              const allUploadedUrls = new Set<string>();
+              
+              for (let i = 0; i < downloadedImages.length; i++) {
+                const imgData = downloadedImages[i];
+                console.log(`[juejin] 上传图片 ${i + 1}/${downloadedImages.length}: ${imgData.url.substring(0, 50)}...`);
+                
+                try {
+                  const res = await fetch(imgData.base64);
+                  const blob = await res.blob();
+                  const file = new File([blob], 'image_' + Date.now() + '.png', { type: imgData.mimeType || 'image/png' });
+                  
+                  // 记录粘贴前的所有 URL
+                  const currentContent = cm.getValue();
+                  const beforeUrls = new Set(currentContent.match(/https?:\/\/[^\s\)\]]+/g) || []);
+                  allUploadedUrls.forEach(u => beforeUrls.add(u));
+                  
+                  cm.focus();
+                  
+                  const dt = new DataTransfer();
+                  dt.items.add(file);
+                  const editorWrapper = cmElement.querySelector('.CodeMirror-scroll') || cmElement;
+                  const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true });
+                  Object.defineProperty(pasteEvent, 'clipboardData', { get: () => dt });
+                  editorWrapper.dispatchEvent(pasteEvent);
+                  
+                  // 等待新 URL 出现
+                  let newUrl: string | null = null;
+                  const startTime = Date.now();
+                  while (Date.now() - startTime < 15000) {
+                    await sleep(500);
+                    const newContent = cm.getValue();
+                    const currentUrls = newContent.match(/https?:\/\/[^\s\)\]]+/g) || [];
+                    for (const url of currentUrls) {
+                      if (!beforeUrls.has(url) && (url.includes('juejin') || url.includes('byteimg') || url.includes('xtjj'))) {
+                        newUrl = url;
+                        break;
+                      }
+                    }
+                    if (newUrl) break;
+                  }
+                  
+                  if (newUrl) {
+                    imageUrlMap.set(imgData.url, newUrl);
+                    allUploadedUrls.add(newUrl);
+                    console.log(`[juejin] 图片上传成功: ${newUrl}`);
+                  } else {
+                    console.warn(`[juejin] 图片上传超时: ${imgData.url}`);
+                  }
+                } catch (e) {
+                  console.error('[juejin] 图片上传异常:', e);
+                }
+                await sleep(300);
+              }
+              
+              console.log(`[juejin] 图片上传完成: ${imageUrlMap.size}/${downloadedImages.length} 成功`);
+              
+              // 清空编辑器，准备填充最终内容
+              cm.setValue('');
+              await sleep(100);
             }
+            
+            // 替换 markdown 中的图片链接
+            for (const [oldUrl, newUrl] of imageUrlMap) {
+              markdown = markdown.split(oldUrl).join(newUrl);
+            }
+          }
+          
+          // 填充内容
+          console.log('[juejin] Step 2.2: 填充内容');
+          const cm2 = document.querySelector('.CodeMirror') as any;
+          if (cm2 && cm2.CodeMirror) {
+            cm2.CodeMirror.setValue(markdown);
+          } else {
+            throw new Error('未找到掘金编辑器');
           }
           await sleep(500);
 
-          // 3. 点击顶部"发布"按钮打开发布弹窗
+          // 3. 点击发布按钮
           console.log('[juejin] Step 3: 点击发布按钮');
-          // 顶部发布按钮通常在 header 区域，文字是"发布"而不是"确定并发布"
           const allBtns = Array.from(document.querySelectorAll('button'));
           const publishBtn = allBtns.find(function(btn) { 
-            const text = btn.textContent?.trim();
-            // 排除"确定并发布"，只找"发布"
-            return text === '发布'; 
+            return btn.textContent?.trim() === '发布'; 
           }) as HTMLElement | null;
           
           if (!publishBtn) throw new Error('未找到顶部发布按钮');
@@ -129,7 +195,6 @@ export const juejinAdapter: PlatformAdapter = {
           // 4. 处理发布弹窗
           console.log('[juejin] Step 4: 处理发布弹窗');
           
-          // 等待弹窗出现
           let modalFound = false;
           for (let retry = 0; retry < 10; retry++) {
             const modal = document.querySelector('.publish-popup, [class*="publish-popup"], [class*="modal"], .editor-publish-dialog');
@@ -145,19 +210,13 @@ export const juejinAdapter: PlatformAdapter = {
             console.log('[juejin] 警告：未发现弹窗');
           }
           
-          // 4.1 选择分类（必选）
+          // 4.1 选择分类
           console.log('[juejin] Step 4.1: 选择分类');
-          const categorySelectors = [
-            '.category-list .item:not(.active)',
-            '[class*="category"] .item:not(.active)',
-          ];
-          
+          const categorySelectors = ['.category-list .item:not(.active)', '[class*="category"] .item:not(.active)'];
           let categorySelected = false;
           for (const sel of categorySelectors) {
             const items = document.querySelectorAll(sel);
-            console.log('[juejin] 尝试分类选择器', sel, '找到', items.length, '个');
             if (items.length > 0) {
-              // 选择第一个分类（后端）
               (items[0] as HTMLElement).click();
               categorySelected = true;
               console.log('[juejin] 已选择分类:', (items[0] as HTMLElement).textContent?.trim());
@@ -165,22 +224,15 @@ export const juejinAdapter: PlatformAdapter = {
               break;
             }
           }
+          if (!categorySelected) console.warn('[juejin] 未能选择分类');
           
-          if (!categorySelected) {
-            console.warn('[juejin] 未能选择分类');
-          }
-          
-          // 4.2 添加标签（必选，至少一个）
+          // 4.2 添加标签
           console.log('[juejin] Step 4.2: 添加标签');
-          // 掘金标签是点击输入框后从下拉列表选择
           const tagInput = document.querySelector('input[placeholder*="标签"], input[placeholder*="搜索添加标签"], .tag-input input') as HTMLInputElement | null;
           if (tagInput) {
-            console.log('[juejin] 找到标签输入框');
             tagInput.focus();
             tagInput.click();
             await sleep(500);
-            
-            // 等待标签下拉列表出现，选择第一个推荐标签
             const tagDropdown = document.querySelector('.tag-list, [class*="tag-list"], [class*="dropdown"]');
             if (tagDropdown) {
               const tagItem = tagDropdown.querySelector('.item, .tag-item, li') as HTMLElement | null;
@@ -190,45 +242,29 @@ export const juejinAdapter: PlatformAdapter = {
                 await sleep(300);
               }
             } else {
-              // 尝试直接输入一个常见标签
               tagInput.value = '前端';
               tagInput.dispatchEvent(new Event('input', { bubbles: true }));
               await sleep(500);
-              // 回车确认
               tagInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
               await sleep(300);
-            }
-          } else {
-            // 尝试其他方式：找到"添加标签"按钮
-            const addTagBtn = Array.from(document.querySelectorAll('span, div, button')).find(function(el) {
-              return el.textContent?.includes('添加标签') || el.textContent?.includes('搜索添加');
-            }) as HTMLElement | null;
-            if (addTagBtn) {
-              console.log('[juejin] 找到添加标签按钮');
-              addTagBtn.click();
-              await sleep(500);
             }
           }
           await sleep(500);
           
-          // 4.3 填写摘要（必选，不超过100字）
+          // 4.3 填写摘要
           console.log('[juejin] Step 4.3: 填写摘要');
           const summaryTextarea = document.querySelector('textarea[placeholder*="摘要"], textarea[placeholder*="简介"], .summary-input textarea, [class*="abstract"] textarea') as HTMLTextAreaElement | null;
           if (summaryTextarea) {
-            // 使用文章摘要，或截取内容前100字
             const summary = payload.summary || (payload.contentMarkdown || '').substring(0, 100).replace(/[#*`\[\]]/g, '');
             summaryTextarea.focus();
             summaryTextarea.value = summary;
             summaryTextarea.dispatchEvent(new Event('input', { bubbles: true }));
             console.log('[juejin] 已填写摘要:', summary.substring(0, 30) + '...');
             await sleep(300);
-          } else {
-            console.warn('[juejin] 未找到摘要输入框');
           }
-          
           await sleep(500);
           
-          // 5. 点击"确定并发布"按钮
+          // 5. 点击确定并发布
           console.log('[juejin] Step 5: 点击确定并发布');
           const confirmBtn = Array.from(document.querySelectorAll('button')).find(function(btn) { 
             const text = btn.textContent?.trim() || '';
@@ -240,11 +276,10 @@ export const juejinAdapter: PlatformAdapter = {
             confirmBtn.click();
             await sleep(2000);
           } else {
-            console.error('[juejin] 未找到确定并发布按钮');
             throw new Error('未找到确定并发布按钮');
           }
 
-          // 6. 等待跳转获取文章 URL
+          // 6. 等待跳转
           console.log('[juejin] Step 6: 等待文章 URL');
           for (let i = 0; i < 40; i++) {
             if (/juejin\.cn\/post\/\d+/.test(window.location.href)) {
