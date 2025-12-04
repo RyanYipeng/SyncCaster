@@ -1,6 +1,6 @@
 <template>
   <div>
-    <h2 class="text-2xl font-bold text-gray-800 mb-4">编辑文章</h2>
+    <h2 class="text-2xl font-bold mb-4" :class="isDark ? 'text-gray-100' : 'text-gray-800'">编辑文章</h2>
 
     <div v-if="loading" class="text-gray-500">加载中...</div>
     <div v-else-if="notFound" class="text-red-500">未找到文章</div>
@@ -283,6 +283,8 @@
 import { ref, computed, onMounted } from 'vue';
 import { db, type Account } from '@synccaster/core';
 import { marked } from 'marked';
+
+defineProps<{ isDark?: boolean }>();
 
 const loading = ref(true);
 const notFound = ref(false);

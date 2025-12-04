@@ -1,13 +1,29 @@
 <template>
   <n-config-provider :theme="theme">
     <n-message-provider>
-      <div class="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 relative">
+      <div 
+        class="min-h-screen relative transition-colors duration-300"
+        :class="isDark 
+          ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-slate-900' 
+          : 'bg-gradient-to-br from-blue-50 via-white to-purple-50'"
+      >
         <!-- 装饰性背景 -->
-        <div class="fixed top-0 right-0 w-96 h-96 bg-blue-100 rounded-full opacity-10 -translate-y-48 translate-x-48 blur-3xl pointer-events-none"></div>
-        <div class="fixed bottom-0 left-0 w-96 h-96 bg-purple-100 rounded-full opacity-10 translate-y-48 -translate-x-48 blur-3xl pointer-events-none"></div>
+        <div 
+          class="fixed top-0 right-0 w-96 h-96 rounded-full opacity-10 -translate-y-48 translate-x-48 blur-3xl pointer-events-none transition-colors duration-300"
+          :class="isDark ? 'bg-blue-900' : 'bg-blue-100'"
+        ></div>
+        <div 
+          class="fixed bottom-0 left-0 w-96 h-96 rounded-full opacity-10 translate-y-48 -translate-x-48 blur-3xl pointer-events-none transition-colors duration-300"
+          :class="isDark ? 'bg-purple-900' : 'bg-purple-100'"
+        ></div>
         
         <!-- 头部 -->
-        <header class="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-200/50 shadow-sm">
+        <header 
+          class="sticky top-0 z-50 backdrop-blur-md shadow-sm transition-colors duration-300"
+          :class="isDark 
+            ? 'bg-gray-900/80 border-b border-gray-700/50' 
+            : 'bg-white/80 border-b border-gray-200/50'"
+        >
           <div class="max-w-7xl mx-auto px-6 py-4">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-4 select-none">
@@ -16,13 +32,16 @@
                 </div>
                 <div>
                   <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">SyncCaster</h1>
-                  <p class="text-xs text-gray-500">v2.0.0 · 内容采集与发布助手</p>
+                  <p class="text-xs" :class="isDark ? 'text-gray-400' : 'text-gray-500'">v2.0.0 · 内容采集与发布助手</p>
                 </div>
               </div>
               <div class="flex items-center gap-3">
                 <button
                   @click="toggleTheme"
-                  class="w-10 h-10 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors flex items-center justify-center text-xl select-none"
+                  class="w-10 h-10 rounded-lg transition-colors flex items-center justify-center text-xl select-none border-none outline-none"
+                  :class="isDark 
+                    ? 'bg-gray-700 hover:bg-gray-600 text-yellow-300' 
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'"
                   :title="isDark ? '切换到亮色模式' : '切换到暗色模式'"
                 >
                   {{ isDark ? '🌙' : '☀️' }}
@@ -42,7 +61,9 @@
                 class="group relative px-4 py-3 rounded-xl cursor-pointer select-none transition-all duration-300"
                 :class="currentPath === item.path 
                   ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/30' 
-                  : 'hover:bg-white/60 text-gray-700 hover:text-gray-900'"
+                  : isDark 
+                    ? 'hover:bg-gray-700/60 text-gray-300 hover:text-white' 
+                    : 'hover:bg-white/60 text-gray-700 hover:text-gray-900'"
                 @click="navigate(item.path)"
               >
                 <div class="flex items-center gap-3">
@@ -59,8 +80,13 @@
 
           <!-- 主内容区 -->
           <main class="flex-1 p-6 min-h-[calc(100vh-89px)]">
-            <div class="bg-white/60 backdrop-blur-sm rounded-2xl shadow-sm border border-gray-100 p-6">
-              <component :is="currentComponent" />
+            <div 
+              class="backdrop-blur-sm rounded-2xl shadow-sm p-6 transition-colors duration-300"
+              :class="isDark 
+                ? 'bg-gray-800/60 border border-gray-700' 
+                : 'bg-white/60 border border-gray-100'"
+            >
+              <component :is="currentComponent" :isDark="isDark" />
             </div>
           </main>
         </div>

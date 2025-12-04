@@ -1,6 +1,6 @@
 <template>
   <div>
-    <h2 class="text-2xl font-bold text-gray-800 mb-6">设置</h2>
+    <h2 class="text-2xl font-bold mb-6" :class="isDark ? 'text-gray-100' : 'text-gray-800'">设置</h2>
 
     <n-card title="基础设置" class="mb-4">
       <n-form label-placement="left" label-width="120px">
@@ -43,6 +43,8 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
+
+defineProps<{ isDark?: boolean }>();
 
 const settings = ref({
   autoSave: true,

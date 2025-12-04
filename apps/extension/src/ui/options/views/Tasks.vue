@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="flex items-center justify-between mb-6">
-      <h2 class="text-2xl font-bold text-gray-800">任务中心</h2>
+      <h2 class="text-2xl font-bold" :class="isDark ? 'text-gray-100' : 'text-gray-800'">任务中心</h2>
       <div class="flex gap-2">
         <button
           :disabled="selectedIds.length === 0"
@@ -97,6 +97,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { db } from '@synccaster/core';
 
+defineProps<{ isDark?: boolean }>();
 const allJobs = ref<any[]>([]);
 const posts = ref<Map<string, any>>(new Map());
 const selectedIds = ref<string[]>([]);
@@ -112,10 +113,6 @@ const paginatedJobs = computed(() => {
 });
 
 watch(pageSize, () => { currentPage.value = 1; });
-watch(selectAll, (val) => {
-  selectedIds.value = val ? paginatedJobs.value.map(j => j.id) : [];
-});
-
 onMounted(async () => {
   await loadJobs();
   refreshInterval = window.setInterval(loadJobs, 5000);
@@ -140,7 +137,8 @@ function toggleSelect(id: string) {
   const idx = selectedIds.value.indexOf(id);
   if (idx >= 0) selectedIds.value.splice(idx, 1);
   else selectedIds.value.push(id);
-  selectAll.value = selectedIds.value.length === paginatedJobs.value.length;
+  // 直接更新 selectAll 状态，不触发 watch
+  selectAll.value = selectedIds.value.length === paginatedJobs.value.length && paginatedJobs.value.length > 0;
 }
 
 function toggleSelectAll() {

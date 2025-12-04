@@ -17,7 +17,7 @@
           </div>
         </div>
         <button
-          class="w-9 h-9 rounded-lg bg-white/80 backdrop-blur-sm shadow-sm hover:shadow-md hover:bg-white transition-all text-gray-600 hover:text-gray-800 flex items-center justify-center"
+          class="w-9 h-9 rounded-lg bg-white/80 backdrop-blur-sm shadow-sm hover:shadow-md hover:bg-white transition-all text-gray-600 hover:text-gray-800 flex items-center justify-center border-none outline-none"
           @click="openOptions"
           title="设置"
         >

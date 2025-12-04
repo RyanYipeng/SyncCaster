@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="flex-between mb-6">
-      <h2 class="text-2xl font-bold text-gray-800">文章管理</h2>
+      <h2 class="text-2xl font-bold" :class="isDark ? 'text-gray-100' : 'text-gray-800'">文章管理</h2>
       <div class="flex gap-2">
         <n-button type="error" :disabled="selectedIds.length === 0" @click="deleteSelected">
           🗑️ 删除选中 ({{ selectedIds.length }})
@@ -35,8 +35,8 @@
         >
           <n-checkbox :checked="selectedIds.includes(post.id)" @update:checked="toggleSelect(post.id)" />
           <div class="flex-1 min-w-0">
-            <div class="font-medium text-gray-800 truncate">{{ post.title || '未命名文章' }}</div>
-            <div class="text-sm text-gray-500">{{ formatTime(post.updatedAt) }}</div>
+            <div class="font-medium truncate" :class="isDark ? 'text-gray-100' : 'text-gray-800'">{{ post.title || '未命名文章' }}</div>
+            <div class="text-sm" :class="isDark ? 'text-gray-400' : 'text-gray-500'">{{ formatTime(post.updatedAt) }}</div>
           </div>
           <n-tag type="info" size="small">草稿</n-tag>
           <div class="flex gap-2">
@@ -65,6 +65,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { db } from '@synccaster/core';
 import { useMessage } from 'naive-ui';
 
+defineProps<{ isDark?: boolean }>();
 const message = useMessage();
 const loading = ref(false);
 const posts = ref<any[]>([]);
@@ -86,10 +87,6 @@ const paginatedPosts = computed(() => {
 });
 
 watch(pageSize, () => { currentPage.value = 1; });
-watch(selectAll, (val) => {
-  selectedIds.value = val ? paginatedPosts.value.map(p => p.id) : [];
-});
-
 onMounted(() => loadPosts());
 
 async function loadPosts() {
@@ -107,10 +104,12 @@ function toggleSelect(id: string) {
   const idx = selectedIds.value.indexOf(id);
   if (idx >= 0) selectedIds.value.splice(idx, 1);
   else selectedIds.value.push(id);
-  selectAll.value = selectedIds.value.length === paginatedPosts.value.length;
+  // 直接更新 selectAll 状态，不触发 watch
+  selectAll.value = selectedIds.value.length === paginatedPosts.value.length && paginatedPosts.value.length > 0;
 }
 
 function toggleSelectAll(val: boolean) {
+  selectAll.value = val;
   selectedIds.value = val ? paginatedPosts.value.map(p => p.id) : [];
 }
 

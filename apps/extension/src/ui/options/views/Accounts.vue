@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="flex-between mb-6">
-      <h2 class="text-2xl font-bold text-gray-800">账号管理</h2>
+      <h2 class="text-2xl font-bold" :class="isDark ? 'text-gray-100' : 'text-gray-800'">账号管理</h2>
       <div class="flex gap-2">
         <n-button :loading="refreshingAll" :disabled="accounts.length === 0" @click="refreshAllAccounts">
           🔄 一键刷新全部
@@ -100,6 +100,7 @@ import { ref, onMounted, watch } from 'vue';
 import { db, type Account } from '@synccaster/core';
 import { useMessage } from 'naive-ui';
 
+defineProps<{ isDark?: boolean }>();
 const message = useMessage();
 const accounts = ref<Account[]>([]);
 const showAddDialog = ref(false);
