@@ -1,6 +1,8 @@
 /**
  * 统一 AST 转换管道
- * HTML → HAST → MDAST → Markdown/HTML
+ * 
+ * 新架构：DOM → Canonical AST → Markdown/HTML
+ * 旧架构（保留兼容）：HTML → HAST → MDAST → Markdown/HTML
  */
 import { unified } from 'unified';
 import rehypeParse from 'rehype-parse';
@@ -19,6 +21,12 @@ import type {
   FormulaAsset,
   ContentAST,
 } from '../types/ast';
+
+// 导出新的 Canonical AST 模块
+export * from './canonical-ast';
+export * from './dom-to-ast';
+export * from './ast-serializer';
+export * from './ast-transformer';
 
 /**
  * HTML 转换为 MDAST
@@ -145,8 +153,14 @@ function rehypeExtractFormulas(manifest: AssetManifest) {
       // 3. MathJax v3 (mjx-container)
       if (node.tagName === 'mjx-container') {
         const mathEl = findElement(node, 'math');
-        if (mathEl) {
-          const latex = getText(mathEl);
+        const latex =
+          getAnnotationText(node) ||
+          (mathEl ? getAnnotationText(mathEl) : null) ||
+          getDataTex(node) ||
+          (mathEl ? getDataTex(mathEl) : null) ||
+          (mathEl ? getText(mathEl) : '');
+
+        if (latex) {
           const display = hasClass(node, 'MJXc-display') || hasProperty(node, 'display');
 
           manifest.formulas.push({
@@ -162,17 +176,19 @@ function rehypeExtractFormulas(manifest: AssetManifest) {
 
       // 4. 原生 MathML
       if (node.tagName === 'math' && !hasAncestor(node, parent, 'mjx-container')) {
-        const latex = getText(node);
+        const latex = getAnnotationText(node) || getDataTex(node) || getText(node);
         const display = (node.properties?.display as string) === 'block';
 
-        manifest.formulas.push({
-          id: `formula-${manifest.formulas.length}`,
-          latex,
-          display,
-          engine: 'mathml',
-        });
+        if (latex) {
+          manifest.formulas.push({
+            id: `formula-${manifest.formulas.length}`,
+            latex,
+            display,
+            engine: 'mathml',
+          });
 
-        replaceMathNode(node, latex, display);
+          replaceMathNode(node, latex, display);
+        }
       }
     });
   };
@@ -298,14 +314,38 @@ function findElement(node: HastElement, tagName: string): HastElement | null {
   return result;
 }
 
+function getAnnotationText(node: HastElement): string | null {
+  const ann = findAnnotation(node);
+  if (!ann) return null;
+  const text = getText(ann);
+  return text.trim() ? text.trim() : null;
+}
+
+function getDataTex(node: HastElement): string | null {
+  const props = node.properties || {};
+  const candidates = ['data-latex', 'data-tex'];
+  for (const key of candidates) {
+    const val = props[key];
+    if (typeof val === 'string' && val.trim()) return val.trim();
+    if (Array.isArray(val)) {
+      const joined = val.join('').trim();
+      if (joined) return joined;
+    }
+  }
+  return null;
+}
+
 function hasAncestor(
   node: HastElement,
   parent: any,
   ancestorTag: string
 ): boolean {
-  if (!parent) return false;
-  if (parent.tagName === ancestorTag) return true;
-  return false; // 简化实现
+  if (!parent || typeof (parent as any).tagName !== 'string') return false;
+  const tag = (parent as any).tagName;
+  if (tag === ancestorTag) return true;
+  // MathJax v3 的可访问性包装
+  if (ancestorTag === 'mjx-container' && tag === 'mjx-assistive-mml') return true;
+  return false;
 }
 
 function getText(node: HastElement): string {

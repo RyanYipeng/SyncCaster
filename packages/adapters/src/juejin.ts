@@ -255,22 +255,35 @@ export const juejinAdapter: PlatformAdapter = {
           console.log('[juejin] Step 4.3: 填写摘要');
           const summaryTextarea = document.querySelector('textarea[placeholder*="摘要"], textarea[placeholder*="简介"], .summary-input textarea, [class*="abstract"] textarea') as HTMLTextAreaElement | null;
           if (summaryTextarea) {
-            // 从已替换图片链接的 markdown 中提取纯文本
+            // 从 markdown 中提取纯文本摘要
             let plainText = markdown
               .replace(/!\[[^\]]*\]\([^)]+\)/g, '')  // 移除图片 ![...](...) 
               .replace(/\[[^\]]*\]\([^)]+\)/g, '')  // 移除链接 [...](...) 
+              .replace(/\$\$[\s\S]*?\$\$/g, '')  // 移除块级公式 $$...$$
+              .replace(/\$[^$]+\$/g, '')  // 移除行内公式 $...$
+              .replace(/```[\s\S]*?```/g, '')  // 移除代码块
+              .replace(/`[^`]+`/g, '')  // 移除行内代码
               .replace(/^#{1,6}\s+/gm, '')  // 移除标题符号
-              .replace(/[*_`~\[\]]/g, '')  // 移除格式符号
+              .replace(/^>\s*/gm, '')  // 移除引用符号
+              .replace(/^[-*+]\s+/gm, '')  // 移除列表符号
+              .replace(/^\d+\.\s+/gm, '')  // 移除有序列表符号
+              .replace(/[*_~\[\]]/g, '')  // 移除格式符号
+              .replace(/---+/g, '')  // 移除分割线
               .replace(/\n+/g, ' ')  // 换行转空格
               .replace(/\s+/g, ' ')  // 多空格合并
               .trim();
             
             console.log('[juejin] 提取的纯文本:', plainText.substring(0, 100));
             
+            // 优先使用 payload.summary，如果没有或包含图片链接则使用提取的纯文本
+            let summary = payload.summary || '';
+            // 检查 summary 是否包含图片链接语法
+            if (!summary || /!\[[^\]]*\]\([^)]+\)/.test(summary) || summary.includes('![')) {
+              summary = plainText;
+            }
+            
             // 确保摘要长度在 50-100 字之间
-            let summary = payload.summary || plainText;
             if (summary.length < 50) {
-              // 如果太短，用句号填充
               summary = summary.padEnd(50, '。');
             }
             summary = summary.substring(0, 100);

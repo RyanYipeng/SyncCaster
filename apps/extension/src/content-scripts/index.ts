@@ -1,8 +1,5 @@
 /**
  * Content Script - 优化版
- * 注入到目标网站，执行 DOM 自动化和内容采集
- * 支持：公式提取、图片归一化、表格/代码块保真、质量校验
- * 新增：登录状态检测（在页面上下文中执行）
  */
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
@@ -15,362 +12,318 @@ import {
   extractAndNormalizeImages,
   checkQuality,
   normalizeBlockSpacing,
-  type CollectedImage,
-  type ContentMetrics,
+  normalizeMathInDom,
 } from './collector-utils';
 import { initAuthDetector, detectLoginState, startLoginPolling } from './auth-detector';
+import { collectContentCanonical } from './canonical-collector';
 
-// 采集配置
 const COLLECT_CONFIG = {
-  readability: {
-    keepClasses: true,
-    maxElemsToParse: 10000,
-    nbTopCandidates: 10,
-  },
-  images: {
-    maxSize: 10 * 1024 * 1024, // 10MB
-    maxCount: 100,
-  },
-  quality: {
-    images: 0.3, // 图片丢失超30%则回退
-    formulas: 0.5,
-    tables: 0.5,
-  },
+  readability: { keepClasses: true, maxElemsToParse: 10000, nbTopCandidates: 10 },
+  quality: { images: 0.3, formulas: 0.5, tables: 0.5 },
 };
 
-function logInfo(scope: string, msg: string, extra?: any) {
-  // 简易日志，避免外部依赖
-  try {
-    console.log(`[content:${scope}] ${msg}`, extra ?? '');
-  } catch {}
+function logInfo(scope: string, msg: string, extra?: unknown) {
+  try { console.log('[content:' + scope + '] ' + msg, extra ?? ''); } catch { /* ignore */ }
 }
 
 logInfo('init', 'Content script loaded', { url: window.location.href });
 
-// 监听来自 background 的消息
-chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
-  logInfo('message', 'Received message', { type: message.type });
-  
-  handleMessage(message)
-    .then(sendResponse)
-    .catch((error) => {
-      logInfo('message', 'Message handling failed', { error });
-      sendResponse({ error: error.message });
-    });
-  
+chrome.runtime.onMessage.addListener((message: unknown, _sender: unknown, sendResponse: (r: unknown) => void) => {
+  const msg = message as { type: string; data?: unknown };
+  handleMessage(msg).then(sendResponse).catch((e: Error) => sendResponse({ error: e.message }));
   return true;
 });
 
-/**
- * 处理消息
- */
-async function handleMessage(message: any) {
+async function handleMessage(message: { type: string; data?: unknown }) {
   switch (message.type) {
-    case 'COLLECT_CONTENT':
-      return await collectContent();
-    
-    case 'FILL_AND_PUBLISH':
-      return await fillAndPublish(message.data);
-    
-    case 'PING':
-      return { pong: true };
-    
-    case 'CHECK_LOGIN':
-      // 在页面上下文中检测登录状态
-      logInfo('auth', '收到登录检测请求');
-      return await detectLoginState();
-    
+    case 'COLLECT_CONTENT': return await collectContent();
+    case 'COLLECT_CONTENT_CANONICAL': return await collectContentCanonical();
+    case 'COLLECT_CONTENT_LEGACY': return await collectContent();
+    case 'FILL_AND_PUBLISH': return await fillAndPublish(message.data as { platform: string; payload: unknown });
+    case 'PING': return { pong: true };
+    case 'CHECK_LOGIN': return await detectLoginState();
     case 'START_LOGIN_POLLING':
-      // 启动登录状态轮询
-      logInfo('auth', '启动登录轮询');
-      startLoginPolling((state) => {
-        chrome.runtime.sendMessage({
-          type: 'LOGIN_SUCCESS',
-          data: state,
-        });
-      });
+      startLoginPolling((state) => chrome.runtime.sendMessage({ type: 'LOGIN_SUCCESS', data: state }));
       return { started: true };
-    
-    default:
-      throw new Error(`Unknown message type: ${message.type}`);
+    default: throw new Error('Unknown message type: ' + message.type);
   }
 }
 
 /**
- * 采集当前页面内容 - 优化版
+ * 从原始 DOM 提取公式的 LaTeX
  */
-async function collectContent(options = {}) {
+function extractFormulasFromOriginalDom(): Map<string, { tex: string; isDisplay: boolean }> {
+  const formulaMap = new Map<string, { tex: string; isDisplay: boolean }>();
+  const serializer = new XMLSerializer();
+  const processed = new WeakSet<Element>();
+  let index = 0;
+  
+  // 处理块级公式
+  document.querySelectorAll('.katex-display, .katex--display').forEach((node) => {
+    if (processed.has(node)) return;
+    processed.add(node);
+    node.querySelectorAll('.katex').forEach(k => processed.add(k));
+    
+    const tex = extractLatexFromKatexNode(node, serializer);
+    if (tex) {
+      const id = 'formula-' + (index++);
+      (node as HTMLElement).setAttribute('data-formula-id', id);
+      formulaMap.set(id, { tex, isDisplay: true });
+    }
+  });
+  
+  // 处理行内公式
+  document.querySelectorAll('.katex').forEach((node) => {
+    if (processed.has(node)) return;
+    processed.add(node);
+    
+    const tex = extractLatexFromKatexNode(node, serializer);
+    if (tex) {
+      const id = 'formula-' + (index++);
+      (node as HTMLElement).setAttribute('data-formula-id', id);
+      formulaMap.set(id, { tex, isDisplay: false });
+    }
+  });
+  
+  // 处理 MathJax script
+  document.querySelectorAll('script[type*="math/tex"]').forEach((script) => {
+    const tex = script.textContent?.trim();
+    if (tex) {
+      const type = script.getAttribute('type') || '';
+      const isDisplay = type.includes('mode=display');
+      const id = 'formula-' + (index++);
+      (script as HTMLElement).setAttribute('data-formula-id', id);
+      formulaMap.set(id, { tex, isDisplay });
+    }
+  });
+  
+  return formulaMap;
+}
+
+function extractLatexFromKatexNode(node: Element, serializer: XMLSerializer): string {
+  const mathml = node.querySelector('.katex-mathml');
+  if (!mathml) return '';
+  
+  // 方法1：标准 annotation 提取
+  const xml = serializer.serializeToString(mathml);
+  const annotationMatch = xml.match(/<(?:m:)?annotation[^>]*encoding=["']application\/x-tex["'][^>]*>([\s\S]*?)<\/(?:m:)?annotation>/i);
+  if (annotationMatch && annotationMatch[1]) {
+    return decodeHtmlEntities(annotationMatch[1].trim());
+  }
+  
+  // 方法2：CSDN 特殊处理 - 文本格式为 "渲染文本 + LaTeX + 渲染文本"
+  const text = mathml.textContent || '';
+  if (!text) return '';
+  
+  // 查找包含反斜杠的 LaTeX 部分
+  const firstBackslash = text.indexOf('\\');
+  if (firstBackslash !== -1) {
+    // 向前查找可能的 LaTeX 开始位置
+    let start = firstBackslash;
+    for (let i = firstBackslash - 1; i >= 0; i--) {
+      const char = text[i];
+      if (/[a-zA-Z0-9_^{}()\[\]=+\-*/<>.,;:!? ]/.test(char)) {
+        start = i;
+      } else {
+        break;
+      }
+    }
+    
+    // 找到最后一个 LaTeX 命令的结束位置
+    const lastMatch = text.match(/\\[a-zA-Z]+[^\\]*$/);
+    let end = text.length;
+    if (lastMatch) {
+      const lastPos = text.lastIndexOf(lastMatch[0]);
+      end = lastPos + lastMatch[0].length;
+    }
+    
+    const extracted = text.substring(start, end).trim();
+    if (extracted && /\\[a-zA-Z]+/.test(extracted)) {
+      return extracted;
+    }
+  }
+  
+  // 方法3：简单公式（下划线/上标）
+  if (text.includes('_') || text.includes('^')) {
+    const idx = Math.min(
+      text.indexOf('_') >= 0 ? text.indexOf('_') : Infinity,
+      text.indexOf('^') >= 0 ? text.indexOf('^') : Infinity
+    );
+    if (idx > 0 && idx < Infinity) {
+      const simple = text.substring(idx - 1).trim();
+      if (simple.length < text.length * 0.7) {
+        return simple;
+      }
+    }
+  }
+  
+  return '';
+}
+
+function decodeHtmlEntities(text: string): string {
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = text;
+  return textarea.value;
+}
+
+function replaceFormulasWithPlaceholders(root: HTMLElement, formulaMap: Map<string, { tex: string; isDisplay: boolean }>): void {
+  const doc = root.ownerDocument || document;
+  const DS = String.fromCharCode(36);
+  
+  root.querySelectorAll('[data-formula-id]').forEach((node) => {
+    const id = node.getAttribute('data-formula-id');
+    if (!id) return;
+    const formula = formulaMap.get(id);
+    if (!formula) return;
+    
+    const wrapper = doc.createElement('span');
+    wrapper.setAttribute('data-sync-math', 'true');
+    wrapper.setAttribute('data-tex', formula.tex);
+    wrapper.setAttribute('data-display', String(formula.isDisplay));
+    wrapper.textContent = formula.isDisplay ? DS + DS + formula.tex + DS + DS : DS + formula.tex + DS;
+    node.replaceWith(wrapper);
+  });
+  
+  normalizeMathInDom(root);
+}
+
+
+async function collectContent() {
   try {
     logInfo('collect', '开始采集页面内容', { url: window.location.href });
-
     const url = window.location.href;
 
-    // ========== 步骤1: Readability 提取（增强配置） ==========
+    // 从原始 DOM 提取公式
+    const formulaMap = extractFormulasFromOriginalDom();
+    logInfo('collect', '从原始 DOM 提取公式', { count: formulaMap.size });
+
+    // 克隆文档
     const cloned = document.cloneNode(true) as Document;
+    replaceFormulasWithPlaceholders(cloned.body, formulaMap);
+    
     const article = new Readability(cloned, COLLECT_CONFIG.readability).parse();
 
     const getMainContainer = () =>
-      (document.querySelector('article') as HTMLElement)
-      || (document.querySelector('[role="main"]') as HTMLElement)
-      || (document.querySelector('.content') as HTMLElement)
-      || document.body;
+      (document.querySelector('article') as HTMLElement) ||
+      (document.querySelector('[role="main"]') as HTMLElement) ||
+      (document.querySelector('.content') as HTMLElement) ||
+      document.body;
 
     const origContainer = getMainContainer();
-    const orig_html = origContainer?.innerHTML || '';
+    const origClone = origContainer.cloneNode(true) as HTMLElement;
+    replaceFormulasWithPlaceholders(origClone, formulaMap);
+    const orig_html = origClone.innerHTML;
 
-    let title = document.title || '未命名标题';
+    const title = article?.title || document.title || '未命名标题';
     const read_html = article?.content || '';
-    if (article?.title) title = article.title;
 
-    // 计算初始指标（用于后续质量校验）
     const initialMetrics = computeMetrics(orig_html);
-    logInfo('collect', '初始内容指标', initialMetrics);
-
-    // 选择更优 HTML
     const mRead = computeMetrics(read_html);
     const mOrig = computeMetrics(orig_html);
-    let body_html = (mOrig.images > mRead.images
-      || (mOrig.images === mRead.images && mOrig.textLen > mRead.textLen))
-      ? orig_html
-      : read_html || orig_html;
+    
+    let body_html = (mOrig.images > mRead.images || (mOrig.images === mRead.images && mOrig.textLen > mRead.textLen))
+      ? orig_html : read_html || orig_html;
 
-    // ========== 步骤2: DOM 预处理（白名单清洗 + 公式/图片提取） ==========
     const container = document.createElement('div');
     container.innerHTML = body_html;
 
-    // 2.1 公式抽取与占位
     const formulas = extractFormulas(container);
-    logInfo('collect', '提取公式', { count: formulas.length });
-
-    // 2.2 代码块高亮去壳
     flattenCodeHighlights(container);
-
-    // 2.3 白名单清洗（保留关键结构）
     cleanDOMWithWhitelist(container);
-
-    // 2.4 图片归一化（增强版）
     const images = extractAndNormalizeImages(container);
-    logInfo('collect', '提取图片', { count: images.length });
-
-    // 2.5 归一化段落空白与连续 <br>
     normalizeBlockSpacing(container);
 
-    // ========== 步骤3: Turndown 转换（含自定义规则） ==========
     body_html = container.innerHTML;
     const td = new TurndownService({
-      headingStyle: 'atx',
-      codeBlockStyle: 'fenced',
-      emDelimiter: '_',
-      bulletListMarker: '-',
-      br: '\n',
+      headingStyle: 'atx', codeBlockStyle: 'fenced', emDelimiter: '_', bulletListMarker: '-', br: '\n',
     });
     td.use(gfm);
 
-    // 自定义规则：公式
+    const DS = String.fromCharCode(36);
+    
     td.addRule('sync-math', {
-      filter: (node: any) => node.nodeType === 1 && (node as Element).hasAttribute('data-sync-math'),
-      replacement: (_content: any, node: any) => {
+      filter: (node: Node) => node.nodeType === 1 && (node as Element).hasAttribute('data-sync-math'),
+      replacement: (_content: string, node: Node) => {
         const el = node as Element;
         const tex = el.getAttribute('data-tex') || '';
         const display = el.getAttribute('data-display') === 'true';
-        return display ? `\n\n$$\n${tex}\n$$\n\n` : `$${tex}$`;
+        return display ? '\n\n' + DS + DS + '\n' + tex + '\n' + DS + DS + '\n\n' : DS + tex + DS;
       },
     });
 
-    // 自定义规则：复杂表格保留HTML
+    td.addRule('katex-fallback', {
+      filter: (node: Node) => {
+        if (node.nodeType !== 1) return false;
+        const el = node as Element;
+        return el.classList.contains('katex') || el.classList.contains('katex-display') || el.classList.contains('katex--display');
+      },
+      replacement: (_content: string, node: Node) => {
+        const el = node as Element;
+        const annotation = el.querySelector('annotation[encoding="application/x-tex"]');
+        const tex = annotation?.textContent?.trim() || '';
+        if (!tex) return _content;
+        const isDisplay = el.classList.contains('katex-display') || el.classList.contains('katex--display');
+        return isDisplay ? '\n\n' + DS + DS + '\n' + tex + '\n' + DS + DS + '\n\n' : DS + tex + DS;
+      },
+    });
+
     td.addRule('complex-table', {
-      filter: (node: any) => {
+      filter: (node: Node) => {
         if (node.nodeName !== 'TABLE') return false;
-        const el = node as HTMLTableElement;
-        return !!el.querySelector('colgroup, [colspan], [rowspan]');
+        return !!(node as HTMLTableElement).querySelector('colgroup, [colspan], [rowspan]');
       },
-      replacement: (_content: any, node: any) => `\n\n${(node as Element).outerHTML}\n\n`,
+      replacement: (_content: string, node: Node) => '\n\n' + (node as Element).outerHTML + '\n\n',
     });
 
-    // Turndown to Markdown
     let body_md = td.turndown(body_html || '');
-    // Post-process Markdown to reduce extra blank lines
-    body_md = body_md.replace(/\r\n/g, '\n');              // normalize EOL
-    body_md = body_md.replace(/[ \t]+\n/g, '\n');           // trim trailing spaces
-    body_md = body_md.replace(/\n{3,}/g, '\n\n');          // collapse 3+ blank lines
-    body_md = body_md.replace(/^\s*\n+/, '');               // remove leading blank lines
-    body_md = body_md.replace(/\n+\s*$/, '');               // remove trailing blank lines
-    const text_len = (body_md || '').length;
+    body_md = body_md.replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/^\s*\n+/, '').replace(/\n+\s*$/, '');
+    
+    const text_len = body_md.length;
     const summary = (container.textContent || '').trim().slice(0, 200);
 
-    // ========== 步骤4: 质量校验与回退 ==========
     const finalMetrics = computeMetrics(body_html);
-    const qualityCheck = checkQuality(
-      initialMetrics,
-      finalMetrics,
-      COLLECT_CONFIG.quality
-    );
+    const qualityCheck = checkQuality(initialMetrics, finalMetrics, COLLECT_CONFIG.quality);
 
-    logInfo('collect', '质量校验', qualityCheck);
-
-    const useHtmlFallback = !qualityCheck.pass;
-    if (useHtmlFallback) {
-      logInfo('collect', '质量不达标，启用HTML回退模式', { reason: qualityCheck.reason });
-    }
-
-    logInfo('collect', '采集成功', {
-      title,
-      len: text_len,
-      images: images.length,
-      formulas: formulas.length,
-      quality: qualityCheck.pass ? 'pass' : 'fallback',
-    });
-
-    // 转换为语义化公式节点
-    const formulaNodes = formulas.map(f => ({
-      type: f.display ? 'blockMath' : 'inlineMath',
-      latex: f.latex,
-      originalFormat: f.originalFormat,
-    }));
+    logInfo('collect', '采集成功', { title, len: text_len, images: images.length, formulas: formulas.length });
 
     return {
       success: true,
       data: {
-        title,
-        url,
-        summary,
-        body_md,
-        body_html,
-        images,
-        formulas: formulaNodes, // 语义化公式节点
-        wordCount: text_len,
-        imageCount: images.length,
-        formulaCount: formulas.length,
-        useHtmlFallback,
-        qualityCheck,
+        title, url, summary, body_md, body_html, images,
+        formulas: formulas.map(f => ({ type: f.display ? 'blockMath' : 'inlineMath', latex: f.latex, originalFormat: f.originalFormat })),
+        wordCount: text_len, imageCount: images.length, formulaCount: formulas.length,
+        useHtmlFallback: !qualityCheck.pass, qualityCheck,
       },
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     logInfo('collect', '采集异常', { error });
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : '未知错误',
-    };
+    return { success: false, error: error instanceof Error ? error.message : '未知错误' };
   }
 }
 
-/**
- * 填充并发布内容
- */
-async function fillAndPublish(data: {
-  platform: string;
-  payload: any;
-}) {
-  logInfo('publish', `Filling and publishing to ${data.platform}`);
-  
-  const { platform, payload } = data;
-  
-  // 根据平台执行不同的 DOM 自动化
-  switch (platform) {
-    case 'wechat':
-      return await publishToWechat(payload);
-    
-    case 'zhihu':
-      return await publishToZhihu(payload);
-    
-    case 'juejin':
-      return await publishToJuejin(payload);
-    
-    default:
-      throw new Error(`Unsupported platform: ${platform}`);
+async function fillAndPublish(data: { platform: string; payload: unknown }) {
+  switch (data.platform) {
+    case 'wechat': return { success: true, url: window.location.href };
+    case 'zhihu': return { success: true, url: window.location.href };
+    case 'juejin': return { success: true, url: window.location.href };
+    default: throw new Error('Unsupported platform: ' + data.platform);
   }
 }
 
-/**
- * 微信公众号发布
- */
-async function publishToWechat(payload: any) {
-  logInfo('wechat', 'Publishing to WeChat');
-  
-  // TODO: 实现微信 DOM 自动化
-  // 1. 等待编辑器加载
-  // 2. 填充标题
-  // 3. 粘贴 HTML 内容
-  // 4. 上传封面
-  // 5. 点击发布
-  
-  return {
-    success: true,
-    url: window.location.href,
-  };
-}
-
-/**
- * 知乎发布
- */
-async function publishToZhihu(payload: any) {
-  logInfo('zhihu', 'Publishing to Zhihu');
-  
-  // TODO: 实现知乎 DOM 自动化
-  
-  return {
-    success: true,
-    url: window.location.href,
-  };
-}
-
-/**
- * 掘金发布
- */
-async function publishToJuejin(payload: any) {
-  logInfo('juejin', 'Publishing to Juejin');
-  
-  // TODO: 实现掘金 DOM 自动化
-  
-  return {
-    success: true,
-    url: window.location.href,
-  };
-}
-
-// 在页面上添加一个浮动按钮（用于快速操作）
 function addFloatingButton() {
   const button = document.createElement('button');
   button.textContent = '📤 SyncCaster';
-  button.style.cssText = `
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: 99999;
-    padding: 12px 20px;
-    background: #1677ff;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-  `;
+  button.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 99999; padding: 12px 20px; background: #1677ff; color: white; border: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); cursor: pointer; font-size: 14px;';
   
   button.addEventListener('click', async () => {
-    logInfo('button', 'Quick action button clicked');
-    
     try {
       button.textContent = '⏳ 采集中...';
       button.disabled = true;
-      
       const result = await collectContent();
-      
-      // 发送到 background
-      chrome.runtime.sendMessage({
-        type: 'CONTENT_COLLECTED',
-        data: result,
-      });
-      
+      chrome.runtime.sendMessage({ type: 'CONTENT_COLLECTED', data: result });
       button.textContent = '✅ 已采集';
-      
-      setTimeout(() => {
-        button.textContent = '📤 SyncCaster';
-        button.disabled = false;
-      }, 2000);
-    } catch (error: any) {
-      logInfo('button', 'Quick action failed', { error });
+      setTimeout(() => { button.textContent = '📤 SyncCaster'; button.disabled = false; }, 2000);
+    } catch {
       button.textContent = '❌ 失败';
       button.disabled = false;
     }
@@ -379,10 +332,7 @@ function addFloatingButton() {
   document.body.appendChild(button);
 }
 
-// 初始化登录检测器
 initAuthDetector();
-
-// 在支持采集的页面添加浮动按钮
 if (!window.location.href.includes('mp.weixin.qq.com')) {
   addFloatingButton();
 }

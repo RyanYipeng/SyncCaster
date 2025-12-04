@@ -1,12 +1,20 @@
 /**
  * 内容采集器
  * 负责从网页提取文章内容并转换为统一格式
+ * 
+ * 新架构：DOM → Canonical AST → 各格式输出
+ * 旧架构（保留兼容）：HTML → Markdown → AST
  */
 
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import type { CanonicalPost, AssetRef } from '../types';
+
+// 导出新的 Canonical 采集器
+export * from './canonical-collector';
+// 导出平台规则
+export * from './platform-rules';
 
 export interface CollectionResult {
   success: boolean;
