@@ -39,10 +39,10 @@
             <div class="font-medium truncate" :class="isDark ? 'text-gray-100' : 'text-gray-800'">{{ post.title || '未命名文章' }}</div>
             <div class="text-sm" :class="isDark ? 'text-gray-400' : 'text-gray-500'">{{ formatTime(post.updatedAt) }}</div>
           </div>
-          <n-tag type="info" size="small">草稿</n-tag>
+          <n-tag v-if="post.url" type="success" size="small">已采集</n-tag>
+          <n-tag v-else type="info" size="small">草稿</n-tag>
           <div class="flex gap-2">
-            <n-button size="small" @click="editPost(post.id)">编辑</n-button>
-            <n-button size="small" @click="publishPost(post.id)">发布</n-button>
+            <n-button size="small" type="primary" @click="editPost(post.id)">编辑/发布</n-button>
             <n-button size="small" type="error" @click="deletePost(post.id)">删除</n-button>
           </div>
         </div>
@@ -120,7 +120,6 @@ function formatTime(ts: number) {
 
 function createPost() { window.location.hash = 'editor/new'; }
 function editPost(id: string) { window.location.hash = `editor/${id}`; }
-function publishPost(id: string) { window.location.hash = `editor/${id}`; }
 
 async function deletePost(id: string) {
   if (!confirm('确认删除这篇文章吗？')) return;

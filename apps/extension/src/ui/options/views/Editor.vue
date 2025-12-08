@@ -6,6 +6,29 @@
     <div v-else-if="notFound" class="text-red-500">未找到文章</div>
 
     <div v-else class="space-y-4">
+      <!-- 采集来源链接 -->
+      <div v-if="sourceUrl" class="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+        <span class="text-blue-600">📥 采集来源：</span>
+        <a 
+          :href="sourceUrl" 
+          target="_blank" 
+          rel="noopener noreferrer"
+          class="text-blue-600 hover:text-blue-800 hover:underline truncate flex-1"
+          :title="sourceUrl"
+        >
+          {{ sourceUrl }}
+        </a>
+        <button
+          @click="copyText(sourceUrl)"
+          class="p-1 rounded hover:bg-blue-100 text-blue-600"
+          title="复制链接"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        </button>
+      </div>
+
       <!-- 标题框 -->
       <div class="relative">
         <label class="block text-sm text-gray-600 mb-1">标题</label>
@@ -291,6 +314,7 @@ const notFound = ref(false);
 const id = ref<string>('');
 const title = ref('');
 const body = ref('');
+const sourceUrl = ref('');
 const images = ref<any[]>([]);
 const previewImg = ref<any>(null);
 const showCopyTip = ref(false);
@@ -356,6 +380,7 @@ async function load() {
     if (pid === 'new' || !pid) {
       title.value = '';
       body.value = '';
+      sourceUrl.value = '';
       loading.value = false;
       return;
     }
@@ -367,6 +392,7 @@ async function load() {
     }
     title.value = post.title || '';
     body.value = post.body_md || '';
+    sourceUrl.value = post.url || post.canonicalUrl || '';
     images.value = Array.isArray(post.assets) ? post.assets.filter((a: any) => a.type === 'image') : [];
   } finally {
     loading.value = false;

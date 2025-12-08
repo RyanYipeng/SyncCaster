@@ -226,37 +226,101 @@ async function collectContent() {
   try {
     logInfo('collect', '开始采集页面内容', { url: window.location.href });
     const url = window.location.href;
+    const hostname = window.location.hostname;
 
     // 从原始 DOM 提取公式
     const formulaMap = extractFormulasFromOriginalDom();
     logInfo('collect', '从原始 DOM 提取公式', { count: formulaMap.size });
 
-    // 克隆文档
-    const cloned = document.cloneNode(true) as Document;
-    replaceFormulasWithPlaceholders(cloned.body, formulaMap);
-    
-    const article = new Readability(cloned, COLLECT_CONFIG.readability).parse();
+    // 平台专用内容选择器
+    const getPlatformContent = (): HTMLElement | null => {
+      // CSDN 专用选择器 - 只选择正文内容区域
+      if (hostname.includes('csdn.net')) {
+        const csdnContent = document.querySelector('#content_views') as HTMLElement;
+        if (csdnContent) return csdnContent;
+        const articleContent = document.querySelector('.article_content') as HTMLElement;
+        if (articleContent) return articleContent;
+      }
+      
+      // 知乎专用选择器
+      if (hostname.includes('zhihu.com')) {
+        const zhihuContent = document.querySelector('.Post-RichTextContainer') as HTMLElement;
+        if (zhihuContent) return zhihuContent;
+      }
+      
+      // 掘金专用选择器
+      if (hostname.includes('juejin.cn')) {
+        const juejinContent = document.querySelector('.article-content') as HTMLElement;
+        if (juejinContent) return juejinContent;
+      }
+      
+      return null;
+    };
 
-    const getMainContainer = () =>
-      (document.querySelector('article') as HTMLElement) ||
-      (document.querySelector('[role="main"]') as HTMLElement) ||
-      (document.querySelector('.content') as HTMLElement) ||
-      document.body;
+    // 清理平台特定的无关元素
+    const cleanPlatformContent = (container: HTMLElement) => {
+      // CSDN 清理
+      if (hostname.includes('csdn.net')) {
+        // 移除版权声明
+        container.querySelectorAll('.article-copyright, .copyright-box, .blog-tags-box').forEach(el => el.remove());
+        // 移除文章信息栏（点赞、收藏等）
+        container.querySelectorAll('.article-info-box, .article-bar-top, .article-bar-bottom').forEach(el => el.remove());
+        // 移除推荐阅读
+        container.querySelectorAll('.recommend-box, .recommend-item-box').forEach(el => el.remove());
+        // 移除评论区
+        container.querySelectorAll('.comment-box, #comment').forEach(el => el.remove());
+        // 移除广告
+        container.querySelectorAll('.adsbygoogle, [class*="ad-"]').forEach(el => el.remove());
+        // 移除 CSDN 特有的图标图片（点赞、收藏等小图标）
+        container.querySelectorAll('img[src*="csdnimg.cn/release/blogv2/dist/pc/img/"]').forEach(el => el.remove());
+        // 移除隐藏的元素
+        container.querySelectorAll('[style*="display: none"], [style*="display:none"]').forEach(el => el.remove());
+      }
+      
+      // 知乎清理
+      if (hostname.includes('zhihu.com')) {
+        container.querySelectorAll('.RichContent-actions, .ContentItem-actions').forEach(el => el.remove());
+      }
+      
+      // 掘金清理
+      if (hostname.includes('juejin.cn')) {
+        container.querySelectorAll('.article-suspended-panel, .comment-box').forEach(el => el.remove());
+      }
+      
+      // 通用清理 - 移除常见的无关元素
+      container.querySelectorAll('script, style, noscript, iframe[src*="ad"], .ad, .ads, .advertisement').forEach(el => el.remove());
+    };
 
-    const origContainer = getMainContainer();
-    const origClone = origContainer.cloneNode(true) as HTMLElement;
-    replaceFormulasWithPlaceholders(origClone, formulaMap);
-    const orig_html = origClone.innerHTML;
+    // 优先使用平台专用选择器
+    const platformContent = getPlatformContent();
+    let body_html = '';
+    let title = '';
 
-    const title = article?.title || document.title || '未命名标题';
-    const read_html = article?.content || '';
+    if (platformContent) {
+      // 使用平台专用选择器
+      const contentClone = platformContent.cloneNode(true) as HTMLElement;
+      cleanPlatformContent(contentClone);
+      replaceFormulasWithPlaceholders(contentClone, formulaMap);
+      body_html = contentClone.innerHTML;
+      
+      // 获取标题
+      const titleEl = document.querySelector('h1.title-article, h1[class*="title"], .article-title, h1') as HTMLElement;
+      title = titleEl?.textContent?.trim() || document.title || '未命名标题';
+      
+      logInfo('collect', '使用平台专用选择器', { platform: hostname });
+    } else {
+      // 回退到 Readability
+      const cloned = document.cloneNode(true) as Document;
+      replaceFormulasWithPlaceholders(cloned.body, formulaMap);
+      const article = new Readability(cloned, COLLECT_CONFIG.readability).parse();
+      
+      title = article?.title || document.title || '未命名标题';
+      body_html = article?.content || '';
+      
+      logInfo('collect', '使用 Readability 提取');
+    }
 
-    const initialMetrics = computeMetrics(orig_html);
-    const mRead = computeMetrics(read_html);
-    const mOrig = computeMetrics(orig_html);
-    
-    let body_html = (mOrig.images > mRead.images || (mOrig.images === mRead.images && mOrig.textLen > mRead.textLen))
-      ? orig_html : read_html || orig_html;
+    const initialMetrics = computeMetrics(body_html);
 
     const container = document.createElement('div');
     container.innerHTML = body_html;
