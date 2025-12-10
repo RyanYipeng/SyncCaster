@@ -544,6 +544,21 @@ async function collectContent() {
         // 确保嵌套的 ul/ol 在 li 内部
         fixZhihuListStructure(container);
         
+        // 知乎图片修复：使用 data-actualsrc 或 data-original 替换 src
+        // 知乎的懒加载图片 src 可能是占位符 SVG
+        container.querySelectorAll('img').forEach((img) => {
+          const actualSrc = img.getAttribute('data-actualsrc') || 
+                           img.getAttribute('data-original') ||
+                           img.getAttribute('data-src');
+          const currentSrc = img.getAttribute('src') || '';
+          
+          // 如果 src 是 data:image 占位符，使用真实 URL 替换
+          if (actualSrc && (currentSrc.startsWith('data:') || !currentSrc)) {
+            img.setAttribute('src', actualSrc);
+            console.log('[zhihu] Fixed image src:', actualSrc.substring(0, 50));
+          }
+        });
+        
         // 知乎公式图片替换为 LaTeX 占位符
         container.querySelectorAll('img.ztext-math, img[data-tex]').forEach((img) => {
           const tex = img.getAttribute('data-tex') || img.getAttribute('alt') || '';
@@ -567,6 +582,42 @@ async function collectContent() {
       
       // 通用清理 - 移除常见的无关元素
       container.querySelectorAll('script, style, noscript, iframe[src*="ad"], .ad, .ads, .advertisement').forEach(el => el.remove());
+      
+      // 通用清理 - 过滤平台搜索链接（将链接替换为纯文本）
+      // 这些链接通常是平台自动添加的关键词链接，发布到其他平台会有问题
+      const searchLinkPatterns = [
+        // CSDN 搜索链接
+        /so\.csdn\.net\/so\/search/,
+        /blog\.csdn\.net\/.*\/search/,
+        // 知乎搜索链接
+        /zhihu\.com\/search/,
+        /www\.zhihu\.com\/search/,
+        // 掘金搜索链接
+        /juejin\.cn\/search/,
+        // 简书搜索链接
+        /jianshu\.com\/search/,
+        // 博客园搜索链接
+        /cnblogs\.com\/.*\/search/,
+        // SegmentFault 搜索链接
+        /segmentfault\.com\/search/,
+        // 通用搜索参数模式
+        /[?&]q=/,
+        /[?&]keyword=/,
+        /[?&]search=/,
+      ];
+      
+      container.querySelectorAll('a[href]').forEach((link) => {
+        const href = link.getAttribute('href') || '';
+        const isSearchLink = searchLinkPatterns.some(pattern => pattern.test(href));
+        
+        if (isSearchLink) {
+          // 将搜索链接替换为纯文本，保留链接文字
+          const text = link.textContent || '';
+          const textNode = document.createTextNode(text);
+          link.replaceWith(textNode);
+          console.log('[clean] Removed search link:', href, '-> text:', text);
+        }
+      });
     };
 
     // 优先使用平台专用选择器
