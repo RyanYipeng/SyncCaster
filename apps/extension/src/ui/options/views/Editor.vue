@@ -53,7 +53,19 @@
 
       <!-- 正文框 -->
       <div class="relative">
-        <label class="block text-sm text-gray-600 mb-1">正文（Markdown）</label>
+        <div class="flex items-center justify-between mb-1">
+          <label class="block text-sm text-gray-600">正文</label>
+          <!-- 打开公众号编辑器按钮 -->
+          <button
+            @click="openMdEditor"
+            class="px-3 py-1 text-xs rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors"
+            title="在新标签页中打开完整的公众号编辑器"
+          >
+            🚀 打开公众号编辑器
+          </button>
+        </div>
+        
+        <!-- Markdown 编辑 -->
         <div class="relative">
           <textarea
             v-model="body"
@@ -72,7 +84,9 @@
         </div>
       </div>
 
-      <div class="text-sm text-gray-500">字数：{{ body.length }}</div>
+      <div class="text-sm text-gray-500">
+        <span>字数：{{ body.length }}</span>
+      </div>
 
       <!-- 操作按钮：移到正文下方 -->
       <div class="flex gap-2 pt-2 border-t">
@@ -137,9 +151,9 @@
     >
       <div
         v-if="showCopyTip"
-        class="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg"
+        class="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50"
       >
-        ✓ 已复制到剪贴板
+        ✓ {{ copyTipMessage }}
       </div>
     </transition>
 
@@ -303,8 +317,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { db, type Account } from '@synccaster/core';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { db, type Account, ChromeStorageBridge, type SyncCasterArticle } from '@synccaster/core';
 import { marked } from 'marked';
 
 defineProps<{ isDark?: boolean }>();
@@ -318,11 +332,14 @@ const sourceUrl = ref('');
 const images = ref<any[]>([]);
 const previewImg = ref<any>(null);
 const showCopyTip = ref(false);
+const copyTipMessage = ref('已复制到剪贴板');
 const showPublishDialog = ref(false);
 const showPreview = ref(false);
 const publishing = ref(false);
 const enabledAccounts = ref<Account[]>([]);
 const selectedAccounts = ref<string[]>([]);
+
+
 
 // 计算是否全选
 const allSelected = computed(() => {
@@ -341,14 +358,20 @@ const previewHtml = computed(() => {
   }
 });
 
+// 显示复制提示
+function showCopySuccess(message: string = '已复制到剪贴板') {
+  copyTipMessage.value = message;
+  showCopyTip.value = true;
+  setTimeout(() => {
+    showCopyTip.value = false;
+  }, 2000);
+}
+
 // 复制文本到剪贴板
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
-    showCopyTip.value = true;
-    setTimeout(() => {
-      showCopyTip.value = false;
-    }, 2000);
+    showCopySuccess('已复制到剪贴板');
   } catch (error) {
     console.error('复制失败:', error);
   }
@@ -530,8 +553,12 @@ function closePublishDialog() {
 }
 
 // 预览文章
-function previewPost() {
+async function previewPost() {
   showPreview.value = true;
+  // 如果是微信预览模式，生成微信格式的 HTML
+  if (previewMode.value === 'wechat') {
+    await generateWechatPreview();
+  }
 }
 
 // 关闭预览
@@ -539,9 +566,47 @@ function closePreview() {
   showPreview.value = false;
 }
 
+
+
 // 前往账号管理
 function goToAccounts() {
   window.location.hash = 'accounts';
+}
+
+// 打开公众号编辑器（md-editor）
+async function openMdEditor() {
+  // 确保文章已保存
+  if (!id.value || id.value === 'new') {
+    await save();
+    if (!id.value || id.value === 'new') {
+      alert('请先保存文章');
+      return;
+    }
+  }
+  
+  try {
+    // 构建 SyncCasterArticle 数据
+    const article: SyncCasterArticle = {
+      id: id.value,
+      title: title.value || '未命名标题',
+      content: body.value || '',
+      sourceUrl: sourceUrl.value || undefined,
+      updatedAt: Date.now(),
+    };
+    
+    // 保存到 Chrome Storage
+    await ChromeStorageBridge.saveArticle(article);
+    
+    // 获取扩展的 md-editor.html URL（位于 public/md-editor/ 目录下）
+    const mdEditorUrl = chrome.runtime.getURL('md-editor/md-editor.html');
+    
+    // 在新标签页中打开
+    chrome.tabs.create({ url: mdEditorUrl });
+    
+  } catch (error: any) {
+    console.error('打开公众号编辑器失败:', error);
+    alert('打开公众号编辑器失败: ' + error.message);
+  }
 }
 
 // 确认发布
@@ -618,5 +683,66 @@ async function confirmPublish() {
   }
 }
 
-onMounted(load);
+// 从 Chrome Storage 同步内容（当从 md-editor 返回时）
+async function syncFromStorage() {
+  if (!id.value || id.value === 'new') return;
+  
+  try {
+    const article = await ChromeStorageBridge.loadArticle();
+    if (article && article.id === id.value) {
+      // 检查是否有更新
+      if (article.content !== body.value || article.title !== title.value) {
+        title.value = article.title;
+        body.value = article.content;
+        console.log('已从 Chrome Storage 同步内容');
+      }
+    }
+  } catch (error) {
+    console.error('同步内容失败:', error);
+  }
+}
+
+// 监听页面可见性变化（当用户从 md-editor 返回时）
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    syncFromStorage();
+  }
+}
+
+// 监听 Chrome Storage 变化
+let unsubscribeStorageChange: (() => void) | null = null;
+
+function setupStorageListener() {
+  try {
+    unsubscribeStorageChange = ChromeStorageBridge.onArticleChange((article) => {
+      if (article && article.id === id.value) {
+        // 检查是否有更新
+        if (article.content !== body.value || article.title !== title.value) {
+          title.value = article.title;
+          body.value = article.content;
+          console.log('检测到 Chrome Storage 变化，已同步内容');
+        }
+      }
+    });
+  } catch (error) {
+    console.error('设置 Storage 监听器失败:', error);
+  }
+}
+
+onMounted(() => {
+  load();
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  setupStorageListener();
+});
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  if (unsubscribeStorageChange) {
+    unsubscribeStorageChange();
+  }
+});
 </script>
+
+<style scoped>
+/* 基础样式 */
+</style>

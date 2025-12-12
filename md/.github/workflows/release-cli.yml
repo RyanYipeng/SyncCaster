@@ -1,0 +1,35 @@
+name: Create Cli Release
+
+on:
+  push:
+    tags:
+      - 'cli-v*'
+
+permissions:
+  id-token: write  # Required for OIDC trusted publishing
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.repository == 'doocs/md'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build:cli
+
+      - run: cd packages/md-cli && npm publish --registry=https://registry.npmjs.org/

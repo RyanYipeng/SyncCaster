@@ -1,0 +1,63 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# production
+/build
+dist
+
+# misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor directories and files
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# mockm
+httpData
+
+public/upload/**
+!public/upload/*.gitkeep
+.history
+
+# Package manager lock file
+package-lock.json
+yarn.lock
+# pnpm-lock.yaml
+auto-imports.d.ts
+components.d.ts
+
+.wxt
+.output
+web-ext.config.ts
+.wrangler
+
+# vite-plugin-pwa dev output
+dev-dist
+
+# uTools build artifacts
+apps/utools/dist
+apps/utools/release
+
+# uTools local libs (只在打包时需要，不提交到仓库)
+apps/web/public/static/libs/mathjax
+apps/web/public/static/libs/mermaid
+apps/web/public/static/libs/article-syncjs

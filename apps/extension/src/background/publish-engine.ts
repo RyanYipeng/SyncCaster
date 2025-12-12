@@ -26,6 +26,58 @@ export async function appendJobLog(jobId: string, entry: Omit<LogEntry, 'id' | '
   await db.jobs.update(jobId, { logs: [...job.logs, log], updatedAt: Date.now() });
 }
 
+/**
+ * 获取微信公众号编辑页面 URL
+ * 需要先打开主页获取 token，然后构建编辑页面 URL
+ */
+async function getWechatEditorUrl(homeUrl: string): Promise<string> {
+  // 在微信公众号主页执行脚本获取 token
+  const getTokenScript = async () => {
+    // 尝试从 URL 获取 token
+    const urlParams = new URLSearchParams(window.location.search);
+    let token = urlParams.get('token');
+    
+    // 如果 URL 没有 token，尝试从页面中查找
+    if (!token) {
+      // 查找页面中的 token
+      const scripts = document.querySelectorAll('script');
+      for (const script of scripts) {
+        const match = script.textContent?.match(/token['":\s]+['"]?(\d+)['"]?/);
+        if (match) {
+          token = match[1];
+          break;
+        }
+      }
+    }
+    
+    // 尝试从全局变量获取
+    if (!token && (window as any).wx && (window as any).wx.cgiData) {
+      token = (window as any).wx.cgiData.token;
+    }
+    
+    // 尝试从 localStorage 获取
+    if (!token) {
+      try {
+        const stored = localStorage.getItem('wx_token');
+        if (stored) token = stored;
+      } catch (e) {}
+    }
+    
+    return token;
+  };
+  
+  // 执行脚本获取 token
+  const token = await executeInOrigin(homeUrl, getTokenScript, [], { closeTab: false, active: true });
+  
+  if (!token) {
+    throw new Error('无法获取微信公众号 token，请确保已登录');
+  }
+  
+  // 构建编辑页面 URL
+  const timestamp = Date.now();
+  return `https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit_v2&action=edit&isNew=1&type=77&createType=0&token=${token}&lang=zh_CN&timestamp=${timestamp}`;
+}
+
 export async function publishToTarget(
   jobId: string,
   post: CanonicalPost,
@@ -173,8 +225,30 @@ export async function publishToTarget(
     if (adapter.kind === 'dom') {
       // DOM 自动化模式：直接走站内执行
       if ((adapter as any).dom) {
-        const dom = (adapter as any).dom as { matchers: string[]; fillAndPublish: Function };
-        const targetUrl = dom.matchers?.[0];
+        const dom = (adapter as any).dom as { matchers: string[]; fillAndPublish: Function; getEditorUrl?: Function };
+        
+        // 获取目标 URL
+        let targetUrl: string;
+        
+        // 微信公众号等平台需要动态获取编辑页面 URL
+        if (target.platform === 'wechat') {
+          // 微信公众号需要先打开主页获取 token，然后跳转到编辑页面
+          await jobLogger({ level: 'info', step: 'dom', message: '微信公众号：获取编辑页面 URL' });
+          
+          try {
+            // 先打开微信公众号主页
+            const homeUrl = 'https://mp.weixin.qq.com/';
+            const editorUrl = await getWechatEditorUrl(homeUrl);
+            targetUrl = editorUrl;
+            await jobLogger({ level: 'info', step: 'dom', message: `编辑页面 URL: ${targetUrl}` });
+          } catch (e: any) {
+            await jobLogger({ level: 'error', step: 'dom', message: '获取微信编辑页面失败，请确保已登录微信公众号', meta: { error: e?.message } });
+            throw new Error('获取微信编辑页面失败，请确保已登录微信公众号');
+          }
+        } else {
+          targetUrl = dom.matchers?.[0];
+        }
+        
         if (!targetUrl) {
           throw new Error('DOM adapter missing target URL');
         }

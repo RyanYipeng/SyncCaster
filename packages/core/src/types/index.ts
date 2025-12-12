@@ -112,6 +112,9 @@ export interface CanonicalPost {
   // 原始 Markdown（向后兼容）
   body_md: string;
   
+  // 微信公众号专用 HTML（懒加载，按需生成）
+  body_wechat_html?: string;
+  
   // 语义化 AST（可选，逐步迁移）
   ast?: ASTNode[];
   

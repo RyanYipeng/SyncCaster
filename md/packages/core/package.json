@@ -1,0 +1,30 @@
+{
+  "name": "@md/core",
+  "type": "module",
+  "version": "2.1.0",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./renderer": "./src/renderer/index.ts",
+    "./extensions": "./src/extensions/index.ts",
+    "./utils": "./src/utils/index.ts",
+    "./theme": "./src/theme/index.ts"
+  },
+  "dependencies": {
+    "@md/shared": "workspace:*",
+    "es-toolkit": "^1.42.0",
+    "fflate": "^0.8.2",
+    "front-matter": "^4.0.2",
+    "highlight.js": "^11.11.1",
+    "isomorphic-dompurify": "^2.33.0",
+    "marked": "^17.0.1",
+    "mermaid": "^11.12.1",
+    "postcss": "^8.5.6",
+    "postcss-calc": "^10.1.1",
+    "postcss-custom-properties": "^14.0.6",
+    "reading-time": "^1.5.0"
+  },
+  "devDependencies": {
+    "@md/config": "workspace:*"
+  }
+}

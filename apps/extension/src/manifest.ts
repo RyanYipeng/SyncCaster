@@ -145,7 +145,7 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
     // Web 可访问资源
     web_accessible_resources: [
       {
-        resources: ['assets/*'],
+        resources: ['assets/*', 'md-editor/*', 'md-editor.html'],
         matches: ['<all_urls>'],
       },
     ],
@@ -282,7 +282,7 @@ const manifest = {
   // Web 可访问资源
   web_accessible_resources: [
     {
-      resources: ['assets/*'],
+      resources: ['assets/*', 'md-editor/*', 'md-editor.html'],
       matches: ['<all_urls>'],
     },
   ],

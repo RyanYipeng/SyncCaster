@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@/*": ["../*"]
+    },
+    "types": ["vscode"],
+    "strict": true,
+    "sourceMap": true,
+    "esModuleInterop": true
+  },
+  "include": [
+    "src/**/*",
+    "../../packages/shared/src/global.d.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

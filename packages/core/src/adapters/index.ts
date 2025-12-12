@@ -4,10 +4,11 @@
 import { PlatformAdapter, type AdapterOptions } from './base';
 import { MarkdownAdapter } from './markdown';
 import { HtmlAdapter } from './html';
+import { WechatAdapter, createWechatAdapter } from './wechat';
 import { getPlatformConfig } from '../platforms/configs';
 import type { PlatformCapability } from '../types/ast';
 
-export { PlatformAdapter, MarkdownAdapter, HtmlAdapter };
+export { PlatformAdapter, MarkdownAdapter, HtmlAdapter, WechatAdapter, createWechatAdapter };
 export type { AdapterOptions };
 
 /**
@@ -33,6 +34,11 @@ export function createAdapterFromConfig(
   config: PlatformCapability,
   options: AdapterOptions = {}
 ): PlatformAdapter {
+  // 微信公众号使用专门的适配器
+  if (config.id === 'wechat') {
+    return new WechatAdapter(config, options);
+  }
+
   const outputFormat = config.strategy.outputFormat;
 
   switch (outputFormat) {

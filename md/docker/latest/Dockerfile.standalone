@@ -1,0 +1,22 @@
+ARG VER_GOLANG=1.25.2-alpine
+ARG VER_ALPINE=3.20
+
+FROM --platform=$BUILDPLATFORM "doocs/md:latest-assets" AS assets
+
+FROM --platform=$BUILDPLATFORM "golang:$VER_GOLANG" AS gobuilder
+ARG TARGETARCH
+ARG TARGETOS
+COPY --from=assets /app/* /app/assets/
+COPY server/main.go /app
+RUN apk add git bash gcc musl-dev upx
+WORKDIR /app
+ENV GOOS=$TARGETOS GOARCH=$TARGETARCH
+RUN go build -ldflags "-w -s" -o md main.go && \
+    apk add upx && \
+    if [ "$TARGETARCH" = "amd64" ]; then upx -9 -o md.minify md; else cp md md.minify; fi
+
+FROM --platform=$TARGETPLATFORM "alpine:$VER_ALPINE"
+LABEL MAINTAINER="ylb<contact@yanglibin.info>"
+COPY --from=gobuilder /app/md.minify /bin/md
+EXPOSE 80
+CMD ["md"]
