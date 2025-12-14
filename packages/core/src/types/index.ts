@@ -186,6 +186,16 @@ export interface PlatformPostMap {
 }
 
 /**
+ * 账号状态枚举
+ */
+export enum AccountStatus {
+  ACTIVE = 'active',           // 正常
+  EXPIRED = 'expired',         // 已失效（确认登出）
+  ERROR = 'error',             // 检测异常（临时问题）
+  CHECKING = 'checking',       // 检测中
+}
+
+/**
  * 账号信息
  */
 export interface Account {
@@ -197,6 +207,12 @@ export interface Account {
   createdAt: number;
   updatedAt: number;
   meta?: Record<string, any>;
+  
+  // 状态相关字段
+  status?: AccountStatus;           // 账号状态
+  lastCheckAt?: number;             // 最后检测时间
+  lastError?: string;               // 最后错误信息
+  consecutiveFailures?: number;     // 连续失败次数
 }
 
 /**

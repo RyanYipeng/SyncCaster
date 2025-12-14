@@ -352,8 +352,7 @@ const previewHtml = computed(() => {
   if (!body.value) return '<p class="text-gray-400">暂无内容</p>';
   try {
     return marked(body.value);
-  } catch (error) {
-    console.error('Markdown 解析失败:', error);
+  } catch {
     return `<pre class="text-red-500">Markdown 解析失败</pre>`;
   }
 });
@@ -372,8 +371,8 @@ async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
     showCopySuccess('已复制到剪贴板');
-  } catch (error) {
-    console.error('复制失败:', error);
+  } catch {
+    // Silently ignore copy errors
   }
 }
 
@@ -463,9 +462,7 @@ async function loadEnabledAccounts() {
   try {
     const allAccounts = await db.accounts.toArray();
     enabledAccounts.value = allAccounts.filter(account => account.enabled === true);
-    console.log('已加载账号:', enabledAccounts.value.length, enabledAccounts.value);
-  } catch (error) {
-    console.error('加载账号失败:', error);
+  } catch {
     enabledAccounts.value = [];
   }
 }
@@ -553,20 +550,14 @@ function closePublishDialog() {
 }
 
 // 预览文章
-async function previewPost() {
+function previewPost() {
   showPreview.value = true;
-  // 如果是微信预览模式，生成微信格式的 HTML
-  if (previewMode.value === 'wechat') {
-    await generateWechatPreview();
-  }
 }
 
 // 关闭预览
 function closePreview() {
   showPreview.value = false;
 }
-
-
 
 // 前往账号管理
 function goToAccounts() {
@@ -604,8 +595,7 @@ async function openMdEditor() {
     chrome.tabs.create({ url: mdEditorUrl });
     
   } catch (error: any) {
-    console.error('打开公众号编辑器失败:', error);
-    alert('打开公众号编辑器失败: ' + error.message);
+    alert('打开公众号编辑器失败: ' + (error?.message || '未知错误'));
   }
 }
 
@@ -676,8 +666,7 @@ async function confirmPublish() {
     window.location.hash = 'tasks';
     
   } catch (error: any) {
-    console.error('创建发布任务失败:', error);
-    alert('发布失败: ' + error.message);
+    alert('发布失败: ' + (error?.message || '未知错误'));
   } finally {
     publishing.value = false;
   }
@@ -694,11 +683,10 @@ async function syncFromStorage() {
       if (article.content !== body.value || article.title !== title.value) {
         title.value = article.title;
         body.value = article.content;
-        console.log('已从 Chrome Storage 同步内容');
       }
     }
-  } catch (error) {
-    console.error('同步内容失败:', error);
+  } catch {
+    // Silently ignore sync errors
   }
 }
 
@@ -716,16 +704,14 @@ function setupStorageListener() {
   try {
     unsubscribeStorageChange = ChromeStorageBridge.onArticleChange((article) => {
       if (article && article.id === id.value) {
-        // 检查是否有更新
         if (article.content !== body.value || article.title !== title.value) {
           title.value = article.title;
           body.value = article.content;
-          console.log('检测到 Chrome Storage 变化，已同步内容');
         }
       }
     });
-  } catch (error) {
-    console.error('设置 Storage 监听器失败:', error);
+  } catch {
+    // Silently ignore listener setup errors
   }
 }
 

@@ -5,9 +5,11 @@
  * 1. 登录检测在 content script 中执行（目标网站页面上下文）
  * 2. background 只负责协调流程，不直接检测登录
  * 3. 通过消息机制获取登录状态
+ * 4. 支持直接 API 调用快速刷新（无需打开标签页）
  */
-import { db, type Account } from '@synccaster/core';
+import { db, type Account, AccountStatus } from '@synccaster/core';
 import { Logger } from '@synccaster/utils';
+import { fetchPlatformUserInfo, fetchMultiplePlatformUserInfo, supportDirectApi, type UserInfo, AuthErrorType } from './platform-api';
 
 const logger = new Logger('account-service');
 
@@ -31,6 +33,12 @@ export interface LoginState {
   avatar?: string;
   platform?: string;
   error?: string;
+  meta?: {
+    level?: number;
+    followersCount?: number;
+    articlesCount?: number;
+    viewsCount?: number;
+  };
 }
 
 /**
@@ -107,9 +115,12 @@ const PLATFORMS: Record<string, PlatformConfig> = {
   aliyun: {
     id: 'aliyun',
     name: '阿里云开发者社区',
-    loginUrl: 'https://account.aliyun.com/login/login.htm',
+    // 直接使用开发者社区主页，页面会自动显示登录入口
+    // 原登录页面 /user/login 已失效
+    loginUrl: 'https://developer.aliyun.com/',
     homeUrl: 'https://developer.aliyun.com/',
-    urlPattern: /aliyun\.com/,
+    // 只匹配开发者社区域名，避免在 www.aliyun.com 上检测
+    urlPattern: /developer\.aliyun\.com/,
   },
   segmentfault: {
     id: 'segmentfault',
@@ -355,7 +366,7 @@ export class AccountService {
         nickname: state.nickname || platformName + '用户',
         avatar: state.avatar,
         platform,
-      });
+      }, state.meta);
       
       logger.info('quick-add', '账号添加成功', { nickname: account.nickname });
       
@@ -400,7 +411,7 @@ export class AccountService {
           nickname: state.nickname || platformName + '用户',
           avatar: state.avatar,
           platform,
-        });
+        }, state.meta);
       }
     }
     
@@ -433,7 +444,7 @@ export class AccountService {
             nickname: state.nickname || platformName + '用户',
             avatar: state.avatar,
             platform,
-          });
+          }, state.meta);
           
           // 关闭登录标签页
           try {
@@ -476,7 +487,7 @@ export class AccountService {
               nickname: state.nickname || platformName + '用户',
               avatar: state.avatar,
               platform,
-            });
+            }, state.meta);
             
             // 关闭登录标签页
             try {
@@ -513,8 +524,11 @@ export class AccountService {
   
   /**
    * 保存账号到数据库
+   * 
+   * 新账号默认设置为 ACTIVE 状态，并记录 lastCheckAt 时间戳，
+   * 以便保护期逻辑能够正确识别刚添加的账号。
    */
-  private static async saveAccount(platform: string, userInfo: PlatformUserInfo): Promise<Account> {
+  private static async saveAccount(platform: string, userInfo: PlatformUserInfo, meta?: LoginState['meta']): Promise<Account> {
     const now = Date.now();
     const account: Account = {
       id: `${platform}-${userInfo.userId}`,
@@ -524,11 +538,15 @@ export class AccountService {
       enabled: true,
       createdAt: now,
       updatedAt: now,
-      meta: {},
+      meta: meta || {},
+      // 新账号默认为 ACTIVE 状态，启用保护期机制
+      status: AccountStatus.ACTIVE,
+      lastCheckAt: now,
+      consecutiveFailures: 0,
     };
 
     await db.accounts.put(account);
-    logger.info('save-account', '账号已保存', { platform, nickname: account.nickname });
+    logger.info('save-account', '账号已保存', { platform, nickname: account.nickname, status: account.status });
     return account;
   }
   
@@ -546,7 +564,77 @@ export class AccountService {
   }
   
   /**
-   * 刷新账号信息
+   * 更新账号状态
+   * 
+   * 更新账号的状态、最后检测时间、错误信息和连续失败次数。
+   * 
+   * Requirements: 5.1, 5.4
+   * 
+   * @param accountId - 账号 ID
+   * @param status - 新状态
+   * @param options - 可选参数
+   * @param options.error - 错误信息（失败时设置）
+   * @param options.resetFailures - 是否重置连续失败次数（成功时为 true）
+   * @param options.incrementFailures - 是否增加连续失败次数（失败时为 true）
+   */
+  static async updateAccountStatus(
+    accountId: string,
+    status: AccountStatus,
+    options: {
+      error?: string;
+      resetFailures?: boolean;
+      incrementFailures?: boolean;
+    } = {}
+  ): Promise<void> {
+    const account = await db.accounts.get(accountId);
+    if (!account) {
+      logger.warn('update-status', `账号不存在: ${accountId}`);
+      return;
+    }
+    
+    const now = Date.now();
+    const updates: Partial<Account> = {
+      status,
+      lastCheckAt: now,
+      updatedAt: now,
+    };
+    
+    // 处理错误信息
+    if (options.error !== undefined) {
+      updates.lastError = options.error;
+    } else if (status === AccountStatus.ACTIVE) {
+      // 成功时清除错误信息
+      updates.lastError = undefined;
+    }
+    
+    // 处理连续失败次数
+    if (options.resetFailures) {
+      updates.consecutiveFailures = 0;
+    } else if (options.incrementFailures) {
+      updates.consecutiveFailures = (account.consecutiveFailures || 0) + 1;
+    }
+    
+    await db.accounts.update(accountId, updates);
+    logger.info('update-status', `账号状态已更新: ${accountId}`, { 
+      status, 
+      consecutiveFailures: updates.consecutiveFailures 
+    });
+  }
+  
+  /**
+   * 刷新账号信息（优先使用直接 API 调用）
+   * 
+   * 根据检测结果更新账号状态：
+   * - 成功：状态设为 ACTIVE，重置连续失败次数
+   * - 可重试错误：状态设为 ERROR，增加连续失败次数
+   * - 明确登出：状态设为 EXPIRED
+   * 
+   * 新登录保护机制：
+   * - 如果账号在 5 分钟内刚登录成功（createdAt 或 lastCheckAt），且当前状态为 ACTIVE
+   * - 遇到可重试错误时，保持 ACTIVE 状态，不立即标记为 ERROR
+   * - 这避免了因 API 临时问题导致刚登录的账号被误判
+   * 
+   * Requirements: 2.1, 2.4, 2.5
    */
   static async refreshAccount(account: Account): Promise<Account> {
     const config = PLATFORMS[account.platform];
@@ -554,7 +642,114 @@ export class AccountService {
       throw new Error(`不支持的平台: ${account.platform}`);
     }
     
-    // 查找或创建标签页
+    const now = Date.now();
+    const PROTECTION_PERIOD = 5 * 60 * 1000; // 5 分钟保护期
+    
+    // 判断是否在保护期内（刚登录成功的账号）
+    // 条件：账号状态为 ACTIVE 或未设置（新账号），且在保护期时间内
+    const lastSuccessTime = account.lastCheckAt || account.createdAt;
+    const timeSinceLastSuccess = now - lastSuccessTime;
+    const statusIsActiveOrNew = account.status === AccountStatus.ACTIVE || account.status === undefined;
+    const isInProtectionPeriod = statusIsActiveOrNew && timeSinceLastSuccess < PROTECTION_PERIOD;
+    
+    // 优先尝试直接 API 调用（快速，无需打开标签页）
+    if (supportDirectApi(account.platform)) {
+      logger.info('refresh-account', `使用直接 API 刷新: ${account.platform}`, {
+        isInProtectionPeriod,
+        status: account.status,
+        timeSinceLastCheck: Math.round(timeSinceLastSuccess / 1000) + 's'
+      });
+      const userInfo = await fetchPlatformUserInfo(account.platform);
+      
+      if (userInfo.loggedIn) {
+        // 成功：更新状态为 ACTIVE，重置连续失败次数
+        const updated: Account = {
+          ...account,
+          nickname: userInfo.nickname || account.nickname,
+          avatar: userInfo.avatar || account.avatar,
+          updatedAt: now,
+          meta: userInfo.meta || account.meta,
+          status: AccountStatus.ACTIVE,
+          lastCheckAt: now,
+          lastError: undefined,
+          consecutiveFailures: 0,
+        };
+        
+        await db.accounts.put(updated);
+        logger.info('refresh-account', '账号信息已更新（API）', { nickname: updated.nickname });
+        return updated;
+      }
+      
+      // 检测失败：根据错误类型决定状态
+      const isRetryable = userInfo.retryable === true && userInfo.errorType !== AuthErrorType.LOGGED_OUT;
+      
+      // 新登录保护：如果在保护期内且错误可重试，保持 ACTIVE 状态
+      if (isInProtectionPeriod && isRetryable) {
+        logger.info('refresh-account', '账号在保护期内，保持 ACTIVE 状态', {
+          platform: account.platform,
+          error: userInfo.error
+        });
+        
+        // 只更新 lastCheckAt，不改变状态
+        const updated: Account = {
+          ...account,
+          updatedAt: now,
+          lastCheckAt: now,
+          // 记录错误但不改变状态
+          lastError: `[临时] ${userInfo.error || '检测异常'}`,
+        };
+        
+        await db.accounts.put(updated);
+        
+        // 返回成功，不抛出错误
+        return updated;
+      }
+      
+      const newStatus = isRetryable ? AccountStatus.ERROR : AccountStatus.EXPIRED;
+      const newConsecutiveFailures = isRetryable 
+        ? (account.consecutiveFailures || 0) + 1 
+        : (account.consecutiveFailures || 0);
+      
+      const updated: Account = {
+        ...account,
+        updatedAt: now,
+        status: newStatus,
+        lastCheckAt: now,
+        lastError: userInfo.error || '检测失败',
+        consecutiveFailures: newConsecutiveFailures,
+      };
+      
+      await db.accounts.put(updated);
+      logger.info('refresh-account', '账号检测失败', { 
+        status: newStatus, 
+        error: userInfo.error,
+        retryable: isRetryable,
+        consecutiveFailures: newConsecutiveFailures
+      });
+      
+      // 抛出错误以便调用方处理
+      const error = new Error(userInfo.error || '账号已登出，请重新登录');
+      (error as any).retryable = isRetryable;
+      (error as any).errorType = userInfo.errorType;
+      throw error;
+    }
+    
+    // 回退：使用标签页方式（仅用于微信公众号等特殊平台）
+    return this.refreshAccountViaTab(account);
+  }
+  
+  /**
+   * 通过打开标签页刷新账号（回退方案）
+   * 
+   * Requirements: 2.1, 2.4, 2.5
+   */
+  private static async refreshAccountViaTab(account: Account): Promise<Account> {
+    const config = PLATFORMS[account.platform];
+    if (!config) {
+      throw new Error(`不支持的平台: ${account.platform}`);
+    }
+    
+    const now = Date.now();
     let tab = await findPlatformTab(account.platform);
     let needCloseTab = false;
     
@@ -572,17 +767,39 @@ export class AccountService {
       const state = await checkLoginInTab(tab.id);
       
       if (!state.loggedIn) {
-        throw new Error('账号已登出，请重新登录');
+        // 标签页检测失败，标记为 EXPIRED
+        const updated: Account = {
+          ...account,
+          updatedAt: now,
+          status: AccountStatus.EXPIRED,
+          lastCheckAt: now,
+          lastError: state.error || '账号已登出',
+          consecutiveFailures: (account.consecutiveFailures || 0) + 1,
+        };
+        
+        await db.accounts.put(updated);
+        
+        const error = new Error('账号已登出，请重新登录');
+        (error as any).retryable = false;
+        (error as any).errorType = AuthErrorType.LOGGED_OUT;
+        throw error;
       }
       
+      // 成功：更新状态为 ACTIVE
       const updated: Account = {
         ...account,
         nickname: state.nickname || account.nickname,
         avatar: state.avatar || account.avatar,
-        updatedAt: Date.now(),
+        updatedAt: now,
+        meta: state.meta || account.meta,
+        status: AccountStatus.ACTIVE,
+        lastCheckAt: now,
+        lastError: undefined,
+        consecutiveFailures: 0,
       };
       
       await db.accounts.put(updated);
+      logger.info('refresh-account', '账号信息已更新（Tab）', { nickname: updated.nickname });
       return updated;
     } finally {
       if (needCloseTab && tab.id) {
@@ -591,6 +808,302 @@ export class AccountService {
         } catch {}
       }
     }
+  }
+  
+  /**
+   * 批量快速刷新所有账号（并行，无需打开标签页）
+   * 
+   * 根据检测结果更新每个账号的状态：
+   * - 成功：状态设为 ACTIVE，重置连续失败次数
+   * - 可重试错误：状态设为 ERROR，增加连续失败次数
+   * - 明确登出：状态设为 EXPIRED
+   * 
+   * 新登录保护机制：
+   * - 如果账号在 5 分钟内刚登录成功，且当前状态为 ACTIVE
+   * - 遇到可重试错误时，保持 ACTIVE 状态，不立即标记为 ERROR
+   * 
+   * Requirements: 2.1, 2.4, 2.5
+   */
+  static async refreshAllAccountsFast(accounts: Account[]): Promise<{
+    success: Account[];
+    failed: { account: Account; error: string; errorType?: string; retryable?: boolean }[];
+  }> {
+    logger.info('refresh-all', `开始批量刷新 ${accounts.length} 个账号`);
+    
+    const now = Date.now();
+    const PROTECTION_PERIOD = 5 * 60 * 1000; // 5 分钟保护期
+    
+    // 按平台分组
+    const platformAccounts = new Map<string, Account>();
+    for (const account of accounts) {
+      platformAccounts.set(account.platform, account);
+    }
+    
+    // 获取所有支持直接 API 的平台
+    const directApiPlatforms = Array.from(platformAccounts.keys()).filter(supportDirectApi);
+    const tabRequiredPlatforms = Array.from(platformAccounts.keys()).filter(p => !supportDirectApi(p));
+    
+    const success: Account[] = [];
+    const failed: { account: Account; error: string; errorType?: string; retryable?: boolean }[] = [];
+    
+    // 并行调用所有支持直接 API 的平台
+    if (directApiPlatforms.length > 0) {
+      const results = await fetchMultiplePlatformUserInfo(directApiPlatforms);
+      
+      for (const [platform, userInfo] of results) {
+        const account = platformAccounts.get(platform);
+        if (!account) continue;
+        
+        // 判断是否在保护期内
+        const lastSuccessTime = account.lastCheckAt || account.createdAt;
+        const isInProtectionPeriod = account.status === AccountStatus.ACTIVE && 
+                                      (now - lastSuccessTime) < PROTECTION_PERIOD;
+        
+        if (userInfo.loggedIn) {
+          // 成功：更新状态为 ACTIVE，重置连续失败次数
+          const updated: Account = {
+            ...account,
+            nickname: userInfo.nickname || account.nickname,
+            avatar: userInfo.avatar || account.avatar,
+            updatedAt: now,
+            meta: userInfo.meta || account.meta,
+            status: AccountStatus.ACTIVE,
+            lastCheckAt: now,
+            lastError: undefined,
+            consecutiveFailures: 0,
+          };
+          
+          await db.accounts.put(updated);
+          success.push(updated);
+        } else {
+          // 检测失败：根据错误类型决定状态
+          const isRetryable = userInfo.retryable === true && userInfo.errorType !== AuthErrorType.LOGGED_OUT;
+          
+          // 新登录保护：如果在保护期内且错误可重试，保持 ACTIVE 状态
+          if (isInProtectionPeriod && isRetryable) {
+            logger.info('refresh-all', `账号 ${platform} 在保护期内，保持 ACTIVE 状态`, {
+              error: userInfo.error
+            });
+            
+            // 只更新 lastCheckAt，不改变状态，视为成功
+            const updated: Account = {
+              ...account,
+              updatedAt: now,
+              lastCheckAt: now,
+              lastError: `[临时] ${userInfo.error || '检测异常'}`,
+            };
+            
+            await db.accounts.put(updated);
+            success.push(updated);
+            continue;
+          }
+          
+          const newStatus = isRetryable ? AccountStatus.ERROR : AccountStatus.EXPIRED;
+          const newConsecutiveFailures = isRetryable 
+            ? (account.consecutiveFailures || 0) + 1 
+            : (account.consecutiveFailures || 0);
+          
+          const updated: Account = {
+            ...account,
+            updatedAt: now,
+            status: newStatus,
+            lastCheckAt: now,
+            lastError: userInfo.error || '检测失败',
+            consecutiveFailures: newConsecutiveFailures,
+          };
+          
+          await db.accounts.put(updated);
+          
+          // 传递错误类型和是否可重试信息，返回更新后的账号
+          failed.push({ 
+            account: updated, 
+            error: userInfo.error || '登录已失效',
+            errorType: userInfo.errorType,
+            retryable: isRetryable
+          });
+        }
+      }
+    }
+    
+    // 串行处理需要打开标签页的平台（现在应该没有了，但保留兼容性）
+    for (const platform of tabRequiredPlatforms) {
+      const account = platformAccounts.get(platform);
+      if (!account) continue;
+      
+      try {
+        const updated = await this.refreshAccountViaTab(account);
+        success.push(updated);
+      } catch (e: any) {
+        // refreshAccountViaTab 已经更新了数据库中的状态
+        // 重新获取更新后的账号
+        const updatedAccount = await db.accounts.get(account.id);
+        failed.push({ 
+          account: updatedAccount || account, 
+          error: e.message, 
+          retryable: (e as any).retryable ?? true,
+          errorType: (e as any).errorType
+        });
+      }
+    }
+    
+    logger.info('refresh-all', `刷新完成: ${success.length} 成功, ${failed.length} 失败`);
+    return { success, failed };
+  }
+  
+  /**
+   * 重新登录账号
+   * 
+   * 流程：
+   * 1. 打开平台登录页面
+   * 2. 轮询检测登录成功（使用 checkLoginInTab）
+   * 3. 登录成功后更新账号状态为 ACTIVE
+   * 4. 关闭登录标签页并返回更新后的账号
+   * 
+   * Requirements: 4.2, 4.3, 4.4, 4.5
+   * 
+   * @param account - 需要重新登录的账号
+   * @returns 更新后的账号信息
+   */
+  static async reloginAccount(account: Account): Promise<Account> {
+    const platformName = PLATFORM_NAMES[account.platform] || account.platform;
+    const config = PLATFORMS[account.platform];
+    
+    if (!config) {
+      throw new Error(`不支持的平台: ${platformName}`);
+    }
+    
+    logger.info('relogin', `开始重新登录: ${platformName}`, { accountId: account.id });
+    
+    // 打开登录页面
+    logger.info('relogin', `打开登录页面: ${config.loginUrl}`);
+    const tab = await chrome.tabs.create({ url: config.loginUrl, active: true });
+    
+    if (!tab.id) {
+      throw new Error('无法打开登录页面');
+    }
+    
+    const tabId = tab.id;
+    
+    // 等待页面加载
+    await waitForTabLoad(tabId);
+    
+    // 创建 Promise 等待登录成功
+    return new Promise<Account>((resolve, reject) => {
+      let pollingStopped = false;
+      let attempts = 0;
+      const maxAttempts = 180; // 3分钟（每秒检测一次）
+      
+      // 设置登录成功回调（来自 content script 的主动通知）
+      this.loginCallbacks.set(account.platform, async (state) => {
+        if (pollingStopped) return;
+        pollingStopped = true;
+        logger.info('relogin', '登录成功回调触发', state);
+        
+        try {
+          const now = Date.now();
+          
+          // 更新账号状态为 ACTIVE，重置连续失败次数，清除错误信息
+          const updated: Account = {
+            ...account,
+            nickname: state.nickname || account.nickname,
+            avatar: state.avatar || account.avatar,
+            updatedAt: now,
+            meta: state.meta || account.meta,
+            status: AccountStatus.ACTIVE,
+            lastCheckAt: now,
+            lastError: undefined,
+            consecutiveFailures: 0,
+          };
+          
+          await db.accounts.put(updated);
+          logger.info('relogin', '账号状态已更新为 ACTIVE', { nickname: updated.nickname });
+          
+          // 关闭登录标签页
+          try {
+            await chrome.tabs.remove(tabId);
+          } catch {}
+          
+          resolve(updated);
+        } catch (e: any) {
+          reject(e);
+        }
+      });
+      
+      // 启动轮询检测
+      const poll = async () => {
+        if (pollingStopped) return;
+        
+        attempts++;
+        logger.debug('relogin', `轮询检测 ${attempts}/${maxAttempts}`);
+        
+        // 检查标签页是否还存在
+        try {
+          await chrome.tabs.get(tabId);
+        } catch {
+          // 标签页已关闭
+          pollingStopped = true;
+          this.loginCallbacks.delete(account.platform);
+          reject(new Error('登录窗口已关闭，登录未完成'));
+          return;
+        }
+        
+        // 检测登录状态
+        try {
+          const state = await checkLoginInTab(tabId);
+          
+          if (state.loggedIn) {
+            pollingStopped = true;
+            this.loginCallbacks.delete(account.platform);
+            
+            const now = Date.now();
+            
+            // 更新账号状态为 ACTIVE，重置连续失败次数，清除错误信息
+            const updated: Account = {
+              ...account,
+              nickname: state.nickname || account.nickname,
+              avatar: state.avatar || account.avatar,
+              updatedAt: now,
+              meta: state.meta || account.meta,
+              status: AccountStatus.ACTIVE,
+              lastCheckAt: now,
+              lastError: undefined,
+              consecutiveFailures: 0,
+            };
+            
+            await db.accounts.put(updated);
+            logger.info('relogin', '重新登录成功', { nickname: updated.nickname });
+            
+            // 关闭登录标签页
+            try {
+              await chrome.tabs.remove(tabId);
+            } catch {}
+            
+            resolve(updated);
+            return;
+          }
+        } catch (e: any) {
+          logger.warn('relogin', '检测失败', { error: e.message });
+        }
+        
+        // 继续轮询
+        if (attempts < maxAttempts && !pollingStopped) {
+          setTimeout(poll, 1000); // 每秒检测一次
+        } else if (!pollingStopped) {
+          pollingStopped = true;
+          this.loginCallbacks.delete(account.platform);
+          
+          // 关闭登录标签页
+          try {
+            await chrome.tabs.remove(tabId);
+          } catch {}
+          
+          reject(new Error('登录超时（3分钟），请重试'));
+        }
+      };
+      
+      // 开始轮询（等待页面加载后开始）
+      setTimeout(poll, 2000);
+    });
   }
 }
 

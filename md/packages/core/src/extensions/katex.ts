@@ -76,8 +76,7 @@ function createRenderer(display: boolean, withStyle: boolean = true) {
 
       return `<section class="katex-block">${svg.outerHTML}</section>`
     }
-    catch (error) {
-      console.warn(`[MathJax] Rendering error:`, error)
+    catch {
       // Fallback on error
       if (!display) {
         return `<span class="katex-inline"><code class="katex-fallback">${escapedText}</code></span>`
@@ -93,7 +92,6 @@ function createRenderer(display: boolean, withStyle: boolean = true) {
  */
 export function renderPendingMath(container: Document | Element = document): void {
   if (!isMathJaxReady()) {
-    console.warn(`[MathJax] Not ready, cannot render pending math`)
     return
   }
 
@@ -128,8 +126,8 @@ export function renderPendingMath(container: Document | Element = document): voi
         element.removeAttribute(`data-math-tex`)
       }
     }
-    catch (error) {
-      console.warn(`[MathJax] Failed to render:`, tex, error)
+    catch {
+      // Silently ignore rendering errors
     }
   })
 }

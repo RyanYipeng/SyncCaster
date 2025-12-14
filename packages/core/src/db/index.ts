@@ -39,6 +39,19 @@ export class SyncCasterDB extends Dexie {
       config: 'id, key',
       logs: 'id, timestamp, level',
     });
+
+    // Version 2: Add account status fields
+    this.version(2).stores({
+      posts: 'id, updatedAt, createdAt, title',
+      assets: 'id, hash, type, createdAt',
+      jobs: 'id, postId, state, scheduleAt, createdAt, updatedAt',
+      platformMaps: 'id, [postId+platform], postId, platform, accountId, status, lastSyncAt',
+      accounts: 'id, platform, enabled, createdAt, status, lastCheckAt',
+      secrets: 'id, accountId',
+      templates: 'id, name, createdAt',
+      config: 'id, key',
+      logs: 'id, timestamp, level',
+    });
   }
 }
 

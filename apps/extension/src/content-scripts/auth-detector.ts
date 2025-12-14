@@ -1,10 +1,10 @@
 /**
- * 登录检测器 - 在目标网站页面上下文中运行
+ * 登录检测器 - 优化版
  * 
- * 核心思路：
- * 1. 在目标网站的页面中执行登录检测（content script）
- * 2. 通过 DOM、站内 JS 变量、站内 API 判断登录状态
- * 3. 将结果通过消息机制告诉 background
+ * 核心思路：优先使用各平台 API 获取用户信息
+ * 1. 在目标网站的页面中执行（content script）
+ * 2. 优先调用平台 API（自动带 Cookie）
+ * 3. API 失败时回退到 DOM 检测
  */
 
 export interface LoginState {
@@ -14,70 +14,37 @@ export interface LoginState {
   avatar?: string;
   platform?: string;
   error?: string;
+  meta?: {
+    level?: number;
+    followersCount?: number;
+    articlesCount?: number;
+    viewsCount?: number;
+  };
 }
 
 /**
  * 平台登录检测器接口
  */
 interface PlatformAuthDetector {
-  /** 平台 ID */
   id: string;
-  /** 匹配的 URL 模式 */
   urlPatterns: RegExp[];
-  /** 在页面中检测登录状态 */
   checkLogin(): Promise<LoginState>;
 }
 
-/**
- * 日志函数
- */
 function log(scope: string, msg: string, data?: any) {
   console.log(`[auth-detector:${scope}] ${msg}`, data ?? '');
 }
 
 // ============================================================
-// 各平台登录检测器实现
+// 掘金检测器 - API 优先
 // ============================================================
-
-
-/**
- * 掘金登录检测器
- */
 const juejinDetector: PlatformAuthDetector = {
   id: 'juejin',
   urlPatterns: [/juejin\.cn/],
   async checkLogin(): Promise<LoginState> {
     log('juejin', '检测登录状态...');
     
-    // 方法1: 检查 DOM 中的用户信息
-    const avatarEl = document.querySelector('.avatar-wrapper img, .user-dropdown-list .avatar') as HTMLImageElement;
-    const usernameEl = document.querySelector('.username, .user-dropdown-list .name');
-    
-    if (avatarEl && usernameEl?.textContent?.trim()) {
-      log('juejin', '从 DOM 检测到登录状态');
-      return {
-        loggedIn: true,
-        platform: 'juejin',
-        nickname: usernameEl.textContent.trim(),
-        avatar: avatarEl.src,
-      };
-    }
-    
-    // 方法2: 检查全局变量
-    const win = window as any;
-    if (win.__NUXT__?.state?.user?.id) {
-      const user = win.__NUXT__.state.user;
-      log('juejin', '从 __NUXT__ 检测到登录状态');
-      return {
-        loggedIn: true,
-        platform: 'juejin',
-        userId: user.id,
-        nickname: user.username || user.user_name,
-        avatar: user.avatar_large || user.avatar,
-      };
-    }
-    
-    // 方法3: 调用站内 API（在页面上下文中，Cookie 会自动带上）
+    // 优先使用 API
     try {
       const res = await fetch('https://api.juejin.cn/user_api/v1/user/get', {
         credentials: 'include',
@@ -85,24 +52,30 @@ const juejinDetector: PlatformAuthDetector = {
       if (res.ok) {
         const data = await res.json();
         if (data.err_no === 0 && data.data) {
-          log('juejin', '从 API 检测到登录状态');
+          const user = data.data;
+          log('juejin', '从 API 获取到用户信息', { nickname: user.user_name });
           return {
             loggedIn: true,
             platform: 'juejin',
-            userId: data.data.user_id,
-            nickname: data.data.user_name,
-            avatar: data.data.avatar_large,
+            userId: user.user_id,
+            nickname: user.user_name,
+            avatar: user.avatar_large || user.avatar,
+            meta: {
+              level: user.level,
+              followersCount: user.follower_count,
+              articlesCount: user.post_article_count,
+              viewsCount: user.got_view_count,
+            },
           };
         }
       }
     } catch (e) {
-      log('juejin', 'API 调用失败', e);
+      log('juejin', 'API 调用失败，尝试 DOM 检测', e);
     }
     
-    // 方法4: 检查登录按钮是否存在
+    // 回退：检查登录按钮
     const loginBtn = document.querySelector('.login-button, [class*="login"]');
-    if (loginBtn) {
-      log('juejin', '检测到登录按钮，未登录');
+    if (loginBtn?.textContent?.includes('登录')) {
       return { loggedIn: false, platform: 'juejin' };
     }
     
@@ -110,234 +83,69 @@ const juejinDetector: PlatformAuthDetector = {
   },
 };
 
-/**
- * CSDN 登录检测器
- */
+// ============================================================
+// CSDN 检测器 - API 优先
+// ============================================================
 const csdnDetector: PlatformAuthDetector = {
   id: 'csdn',
   urlPatterns: [/csdn\.net/],
   async checkLogin(): Promise<LoginState> {
     log('csdn', '检测登录状态...');
-    log('csdn', '当前 URL: ' + window.location.href);
     
-    // 打印页面中所有可能的用户相关元素，帮助调试
-    const debugInfo: string[] = [];
-    
-    // 检查常见的用户头像/用户名容器
-    const possibleContainers = document.querySelectorAll('[class*="user"], [class*="avatar"], [class*="login"], [class*="profile"], [id*="user"], [id*="avatar"]');
-    debugInfo.push(`找到 ${possibleContainers.length} 个可能的用户相关元素`);
-    
-    // 检查是否有图片元素
-    const allImages = document.querySelectorAll('img');
-    const avatarImages = Array.from(allImages).filter(img => 
-      img.src && (img.src.includes('avatar') || img.src.includes('profile') || img.className.includes('avatar'))
-    );
-    debugInfo.push(`找到 ${avatarImages.length} 个可能的头像图片`);
-    if (avatarImages.length > 0) {
-      debugInfo.push(`头像图片: ${avatarImages.map(img => img.src.substring(0, 50)).join(', ')}`);
-    }
-    
-    log('csdn', '调试信息: ' + debugInfo.join(' | '));
-    
-    // 方法1: 检查多种 DOM 选择器
-    const avatarSelectors = [
-      '.toolbar-container-left img',
-      '.user-avatar img',
-      '.avatar-pic img',
-      '.hasmark img',
-      '#csdn-toolbar img.avatar',
-      '.csdn-profile-avatar img',
-      '.user-info img',
-      'img.avatar',
-    ];
-    
-    const usernameSelectors = [
-      '.toolbar-container-middle .name',
-      '.user-name',
-      '.username',
-      '.nick-name',
-      '.hasmark .name',
-      '#csdn-toolbar .name',
-      '.csdn-profile-name',
-      '.user-info .name',
-    ];
-    
-    let avatarEl: HTMLImageElement | null = null;
-    let usernameEl: Element | null = null;
-    
-    for (const selector of avatarSelectors) {
-      const el = document.querySelector(selector) as HTMLImageElement;
-      if (el?.src && !el.src.includes('default') && !el.src.includes('noavatar')) {
-        avatarEl = el;
-        log('csdn', '找到头像元素:', selector);
-        break;
-      }
-    }
-    
-    for (const selector of usernameSelectors) {
-      const el = document.querySelector(selector);
-      if (el?.textContent?.trim() && el.textContent.trim() !== '登录') {
-        usernameEl = el;
-        log('csdn', '找到用户名元素: ' + selector + ' -> ' + el.textContent.trim());
-        break;
-      }
-    }
-    
-    if (usernameEl?.textContent?.trim()) {
-      log('csdn', '从 DOM 检测到登录状态');
-      return {
-        loggedIn: true,
-        platform: 'csdn',
-        nickname: usernameEl.textContent.trim(),
-        avatar: avatarEl?.src,
-      };
-    }
-    
-    // 方法2: 检查全局变量（CSDN 可能在多个地方存储用户信息）
-    const win = window as any;
-    const possibleUserObjects = [
-      win.csdn?.currentUser,
-      win.currentUser,
-      win.userInfo,
-      win.__INITIAL_STATE__?.user,
-      win.loginUserInfo,
-    ];
-    
-    for (const user of possibleUserObjects) {
-      if (user && (user.userName || user.username || user.nickName || user.nickname)) {
-        log('csdn', '从全局变量检测到登录状态', user);
-        return {
-          loggedIn: true,
-          platform: 'csdn',
-          userId: user.userName || user.username || user.userId,
-          nickname: user.nickName || user.nickname || user.userName || user.username,
-          avatar: user.avatar || user.avatarUrl,
-        };
-      }
-    }
-    
-    // 方法3: 检查页面中的脚本内容（CSDN 经常在 script 标签中嵌入用户信息）
-    const scripts = document.querySelectorAll('script');
-    for (const script of scripts) {
-      const content = script.textContent || '';
-      // 查找类似 "userName":"xxx" 或 userName = "xxx" 的模式
-      const userNameMatch = content.match(/"userName"\s*:\s*"([^"]+)"/) || 
-                           content.match(/userName\s*=\s*["']([^"']+)["']/);
-      const nickNameMatch = content.match(/"nickName"\s*:\s*"([^"]+)"/) ||
-                           content.match(/nickName\s*=\s*["']([^"']+)["']/);
-      
-      if (userNameMatch || nickNameMatch) {
-        log('csdn', '从 script 标签检测到登录状态');
-        return {
-          loggedIn: true,
-          platform: 'csdn',
-          userId: userNameMatch?.[1],
-          nickname: nickNameMatch?.[1] || userNameMatch?.[1],
-        };
-      }
-    }
-    
-    // 方法4: 检查登录按钮是否存在
-    const loginBtnSelectors = [
-      '.toolbar-btn-login',
-      '.login-mark',
-      'a[href*="passport.csdn.net/login"]',
-      '.login-btn',
-      'a.login',
-    ];
-    
-    for (const selector of loginBtnSelectors) {
-      const btn = document.querySelector(selector);
-      if (btn) {
-        const text = btn.textContent?.trim() || '';
-        if (text.includes('登录') || text.includes('Login')) {
-          log('csdn', '检测到登录按钮，未登录:', selector);
-          return { loggedIn: false, platform: 'csdn' };
-        }
-      }
-    }
-    
-    // 方法5: 检查是否在登录页面
-    if (window.location.href.includes('passport.csdn.net')) {
-      // 在登录页面，检查是否已经登录成功（可能会跳转）
-      const successEl = document.querySelector('.success, .login-success');
-      if (successEl) {
-        log('csdn', '登录页面显示成功');
-        return { loggedIn: true, platform: 'csdn', nickname: 'CSDN用户' };
-      }
-      log('csdn', '在登录页面，未登录');
-      return { loggedIn: false, platform: 'csdn' };
-    }
-    
-    // 方法6: 检查是否有退出按钮（有退出按钮说明已登录）
-    const logoutSelectors = [
-      'a[href*="logout"]',
-      '.logout',
-      '.sign-out',
-    ];
-    
-    for (const selector of logoutSelectors) {
-      try {
-        const el = document.querySelector(selector);
-        if (el) {
-          log('csdn', '检测到退出按钮，已登录');
-          return { loggedIn: true, platform: 'csdn', nickname: 'CSDN用户' };
-        }
-      } catch {}
-    }
-    
-    // 方法7: 调用 CSDN API 检测登录状态
+    // 优先使用 API
     try {
-      log('csdn', '尝试调用 CSDN API...');
       const res = await fetch('https://me.csdn.net/api/user/show', {
         credentials: 'include',
-        headers: {
-          'Accept': 'application/json',
-        },
+        headers: { 'Accept': 'application/json' },
       });
       
       if (res.ok) {
         const data = await res.json();
-        log('csdn', 'API 响应: ' + JSON.stringify(data).substring(0, 200));
-        
         if (data.code === 200 && data.data) {
           const user = data.data;
+          log('csdn', '从 API 获取到用户信息', { nickname: user.nickname });
           return {
             loggedIn: true,
             platform: 'csdn',
-            userId: user.username || user.userName,
-            nickname: user.nickname || user.nickName || user.username,
-            avatar: user.avatar || user.avatarUrl,
-          };
-        }
-      } else {
-        log('csdn', 'API 响应状态: ' + res.status);
-      }
-    } catch (e: any) {
-      log('csdn', 'API 调用失败: ' + e.message);
-    }
-    
-    // 方法8: 检查 localStorage 中的用户信息
-    try {
-      const userInfo = localStorage.getItem('UserInfo') || localStorage.getItem('userInfo');
-      if (userInfo) {
-        const user = JSON.parse(userInfo);
-        if (user && (user.userName || user.username || user.nickName)) {
-          log('csdn', '从 localStorage 检测到登录状态');
-          return {
-            loggedIn: true,
-            platform: 'csdn',
-            userId: user.userName || user.username,
-            nickname: user.nickName || user.nickname || user.userName,
+            userId: user.username,
+            nickname: user.nickname || user.username,
             avatar: user.avatar,
+            meta: {
+              level: user.level,
+              followersCount: user.fansNum,
+              articlesCount: user.articleNum,
+              viewsCount: user.visitNum,
+            },
           };
         }
       }
     } catch (e) {
-      log('csdn', 'localStorage 检查失败');
+      log('csdn', 'API 调用失败', e);
     }
     
-    // 方法9: 检查 Cookie 中是否有用户名
+    // 备用 API
+    try {
+      const res = await fetch('https://blog.csdn.net/community/home-api/v1/get-business-info', {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.code === 200 && data.data) {
+          const user = data.data;
+          log('csdn', '从备用 API 获取到用户信息');
+          return {
+            loggedIn: true,
+            platform: 'csdn',
+            userId: user.username,
+            nickname: user.nickName || user.username,
+            avatar: user.avatar,
+          };
+        }
+      }
+    } catch {}
+    
+    // 检查 Cookie
     try {
       const cookies = document.cookie;
       const userNameMatch = cookies.match(/UserName=([^;]+)/);
@@ -351,69 +159,40 @@ const csdnDetector: PlatformAuthDetector = {
           nickname: userName,
         };
       }
-    } catch (e) {
-      log('csdn', 'Cookie 检查失败');
-    }
+    } catch {}
     
-    log('csdn', '未能确定登录状态，默认未登录');
     return { loggedIn: false, platform: 'csdn' };
   },
 };
 
-/**
- * 知乎登录检测器
- */
+// ============================================================
+// 知乎检测器 - API 优先
+// ============================================================
 const zhihuDetector: PlatformAuthDetector = {
   id: 'zhihu',
   urlPatterns: [/zhihu\.com/],
   async checkLogin(): Promise<LoginState> {
     log('zhihu', '检测登录状态...');
     
-    // 方法1: 检查 DOM
-    const avatarEl = document.querySelector('.AppHeader-profile img, .Avatar') as HTMLImageElement;
-    const usernameEl = document.querySelector('.AppHeader-profile .Popover, .ProfileHeader-name');
-    
-    if (avatarEl?.src && !avatarEl.src.includes('default')) {
-      log('zhihu', '从 DOM 检测到登录状态');
-      return {
-        loggedIn: true,
-        platform: 'zhihu',
-        avatar: avatarEl.src,
-        nickname: usernameEl?.textContent?.trim(),
-      };
-    }
-    
-    // 方法2: 检查全局变量
-    const win = window as any;
-    if (win.__INITIAL_STATE__?.entities?.users) {
-      const users = win.__INITIAL_STATE__.entities.users;
-      const currentUserId = win.__INITIAL_STATE__.currentUser;
-      if (currentUserId && users[currentUserId]) {
-        const user = users[currentUserId];
-        log('zhihu', '从 __INITIAL_STATE__ 检测到登录状态');
-        return {
-          loggedIn: true,
-          platform: 'zhihu',
-          userId: user.id || user.urlToken,
-          nickname: user.name,
-          avatar: user.avatarUrl,
-        };
-      }
-    }
-    
-    // 方法3: 调用 API
+    // 优先使用 API
     try {
-      const res = await fetch('https://www.zhihu.com/api/v4/me', { credentials: 'include' });
+      const res = await fetch('https://www.zhihu.com/api/v4/me', {
+        credentials: 'include',
+      });
       if (res.ok) {
-        const data = await res.json();
-        if (data.id) {
-          log('zhihu', '从 API 检测到登录状态');
+        const user = await res.json();
+        if (user.id) {
+          log('zhihu', '从 API 获取到用户信息', { nickname: user.name });
           return {
             loggedIn: true,
             platform: 'zhihu',
-            userId: data.id,
-            nickname: data.name,
-            avatar: data.avatar_url,
+            userId: user.id,
+            nickname: user.name,
+            avatar: user.avatar_url,
+            meta: {
+              followersCount: user.follower_count,
+              articlesCount: user.articles_count,
+            },
           };
         }
       }
@@ -421,7 +200,7 @@ const zhihuDetector: PlatformAuthDetector = {
       log('zhihu', 'API 调用失败', e);
     }
     
-    // 方法4: 检查登录按钮
+    // 检查登录按钮
     const loginBtn = document.querySelector('.AppHeader-login, button[aria-label="登录"]');
     if (loginBtn) {
       return { loggedIn: false, platform: 'zhihu' };
@@ -431,73 +210,43 @@ const zhihuDetector: PlatformAuthDetector = {
   },
 };
 
-
-/**
- * 微信公众号登录检测器
- */
+// ============================================================
+// 微信公众号检测器
+// ============================================================
 const wechatDetector: PlatformAuthDetector = {
   id: 'wechat',
   urlPatterns: [/mp\.weixin\.qq\.com/],
   async checkLogin(): Promise<LoginState> {
     log('wechat', '检测登录状态...');
     const url = window.location.href;
-    log('wechat', '当前 URL: ' + url);
-    log('wechat', '页面标题: ' + document.title);
     
-    // 检查是否在登录页面（优先判断）
+    // 检查是否在登录页面
     if (url.includes('/cgi-bin/loginpage') || url.includes('action=scanlogin') || 
         url.includes('/cgi-bin/bizlogin') || url === 'https://mp.weixin.qq.com/' ||
         url === 'https://mp.weixin.qq.com') {
-      // 但如果 URL 中有 token 参数，说明已登录
       if (!url.includes('token=')) {
-        log('wechat', '当前在登录页面（无 token）');
         return { loggedIn: false, platform: 'wechat' };
       }
     }
     
-    // 方法1（最可靠）: 检查 URL 中是否有 token 参数
-    // 微信公众号后台的所有页面都会带 token 参数
+    // 检查 URL 中的 token 参数
     const tokenMatch = url.match(/token=(\d+)/);
     if (tokenMatch && tokenMatch[1]) {
-      log('wechat', '从 URL token 参数判断已登录: token=' + tokenMatch[1]);
-      // 尝试获取昵称
+      log('wechat', '从 URL token 参数判断已登录');
+      
       let nickname = '微信公众号';
-      
-      // 尝试从 DOM 获取昵称
-      const nicknameSelectors = [
-        '.weui-desktop-account__nickname',
-        '.account_nickname', 
-        '.nickname',
-        '.user-name',
-        '.mp-account-name',
-        '.account-name',
-        '[class*="account"] [class*="name"]',
-      ];
-      
-      for (const selector of nicknameSelectors) {
-        try {
-          const el = document.querySelector(selector);
-          if (el?.textContent?.trim() && !el.textContent.includes('登录')) {
-            nickname = el.textContent.trim();
-            log('wechat', '从 DOM 获取到昵称: ' + nickname);
-            break;
-          }
-        } catch {}
-      }
-      
       // 尝试从页面标题获取昵称
-      if (nickname === '微信公众号') {
-        const title = document.title;
-        if (title && !title.includes('登录')) {
-          const match = title.match(/^(.+?)\s*[-–—]\s*微信公众平台/);
-          if (match && match[1].trim().length > 0) {
-            nickname = match[1].trim();
-            log('wechat', '从页面标题获取到昵称: ' + nickname);
-          }
+      const title = document.title;
+      if (title && !title.includes('登录')) {
+        const match = title.match(/^(.+?)\s*[-–—]\s*微信公众平台/);
+        if (match && match[1].trim().length > 0) {
+          nickname = match[1].trim();
         }
       }
       
-      const avatarEl = document.querySelector('.weui-desktop-account__avatar img, .account_avatar img, [class*="avatar"] img') as HTMLImageElement;
+      // 尝试从 DOM 获取头像
+      const avatarEl = document.querySelector('.weui-desktop-account__avatar img, [class*="avatar"] img') as HTMLImageElement;
+      
       return {
         loggedIn: true,
         platform: 'wechat',
@@ -506,125 +255,80 @@ const wechatDetector: PlatformAuthDetector = {
       };
     }
     
-    // 方法2: 检查 URL 路径判断是否在后台（即使没有 token 参数）
-    if (url.includes('/cgi-bin/home') || url.includes('/cgi-bin/frame') || 
-        url.includes('/cgi-bin/message') || url.includes('/cgi-bin/appmsg') ||
-        url.includes('/cgi-bin/operate_appmsg') || url.includes('/cgi-bin/settingpage')) {
-      log('wechat', '从 URL 路径判断已登录');
-      return {
-        loggedIn: true,
-        platform: 'wechat',
-        nickname: '微信公众号',
-      };
-    }
-    
-    // 方法3: 检查 Cookie 中是否有登录标记
+    // 检查 Cookie
     try {
       const cookies = document.cookie;
-      log('wechat', 'Cookie 内容: ' + cookies.substring(0, 200));
-      // 微信公众号登录后会有 slave_sid 或 data_ticket
       if (cookies.includes('slave_sid=') || cookies.includes('data_ticket=') || cookies.includes('bizuin=')) {
-        log('wechat', '从 Cookie 检测到登录状态');
         return {
           loggedIn: true,
           platform: 'wechat',
           nickname: '微信公众号',
         };
       }
-    } catch (e) {
-      log('wechat', 'Cookie 检查失败: ' + e);
-    }
+    } catch {}
     
-    // 方法4: 检查是否有后台管理菜单（登录后才有）
-    const menuSelectors = [
-      '.weui-desktop-sidebar',
-      '.menu_list',
-      '.main_bd',
-      '.new-home__container',
-      '.home-container',
-      '#app .weui-desktop-layout',
-      '.weui-desktop-layout__body',
-      '.weui-desktop-panel',
-      '.new-creation__menu',
-    ];
-    
-    for (const selector of menuSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        log('wechat', '检测到后台菜单，已登录: ' + selector);
-        const nameEl = document.querySelector('[class*="name"], [class*="nickname"]');
-        return {
-          loggedIn: true,
-          platform: 'wechat',
-          nickname: nameEl?.textContent?.trim() || '微信公众号',
-        };
-      }
-    }
-    
-    // 方法5: 检查全局变量
-    const win = window as any;
-    log('wechat', '检查全局变量...');
-    const possibleUserVars = [
-      { name: 'wx.data.user_name', value: win.wx?.data?.user_name },
-      { name: 'cgiData.nick_name', value: win.cgiData?.nick_name },
-      { name: 'cgiData.nickname', value: win.cgiData?.nickname },
-      { name: '__INITIAL_DATA__.nickName', value: win.__INITIAL_DATA__?.nickName },
-      { name: 'pageData.nickName', value: win.pageData?.nickName },
-    ];
-    
-    for (const { name, value } of possibleUserVars) {
-      if (value && typeof value === 'string' && value.length > 0) {
-        log('wechat', '从全局变量检测到登录状态: ' + name + ' = ' + value);
-        return {
-          loggedIn: true,
-          platform: 'wechat',
-          nickname: value,
-        };
-      }
-    }
-    
-    // 方法6: 检查登录表单是否存在（如果存在则未登录）
-    const loginFormSelectors = [
-      '.login__type__container',
-      '.login_frame',
-      '.weui-desktop-login',
-      '.login-box',
-      '#login_container',
-      '.qrcode-login',
-      '.login__type__container__scan',
-    ];
-    
+    // 检查登录表单
+    const loginFormSelectors = ['.login__type__container', '.login_frame', '.weui-desktop-login'];
     for (const selector of loginFormSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        log('wechat', '检测到登录表单，未登录: ' + selector);
+      if (document.querySelector(selector)) {
         return { loggedIn: false, platform: 'wechat' };
       }
     }
     
-    // 打印调试信息
-    const allElements = document.querySelectorAll('[class*="account"], [class*="nickname"], [class*="user"], [class*="avatar"]');
-    log('wechat', '找到 ' + allElements.length + ' 个可能的用户相关元素');
-    if (allElements.length > 0) {
-      const classNames = Array.from(allElements).slice(0, 5).map(el => el.className);
-      log('wechat', '元素类名: ' + classNames.join(', '));
-    }
-    
-    log('wechat', '未能确定登录状态，默认未登录');
     return { loggedIn: false, platform: 'wechat' };
   },
 };
 
-/**
- * 简书登录检测器
- */
+// ============================================================
+// 简书检测器
+// 注意：简书用户主页格式为 https://www.jianshu.com/u/{slug}
+// slug 是类似 bb8f42a96b80 的字符串，不是数字 ID
+// ============================================================
 const jianshuDetector: PlatformAuthDetector = {
   id: 'jianshu',
   urlPatterns: [/jianshu\.com/],
   async checkLogin(): Promise<LoginState> {
     log('jianshu', '检测登录状态...');
     
-    // 检查 DOM
+    // 尝试 API
+    try {
+      const res = await fetch('https://www.jianshu.com/shakespeare/v2/user/info', {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.id) {
+          // 简书的 userId 应该使用 slug 字段（用于主页 URL），而不是数字 id
+          // slug 格式如 bb8f42a96b80
+          const userId = data.slug || String(data.id);
+          log('jianshu', '从 API 获取到用户信息', { userId, nickname: data.nickname });
+          return {
+            loggedIn: true,
+            platform: 'jianshu',
+            userId: userId,
+            nickname: data.nickname,
+            avatar: data.avatar,
+            meta: {
+              followersCount: data.followers_count,
+              articlesCount: data.public_notes_count,
+              viewsCount: data.total_wordage,
+            },
+          };
+        }
+      }
+    } catch (e) {
+      log('jianshu', 'API 调用失败', e);
+    }
+    
+    // 尝试从页面 URL 提取用户 slug（如果在用户主页）
+    const url = window.location.href;
+    const slugMatch = url.match(/jianshu\.com\/u\/([a-zA-Z0-9]+)/);
+    if (slugMatch) {
+      log('jianshu', '从 URL 提取到用户 slug', { slug: slugMatch[1] });
+    }
+    
+    // DOM 检测
     const avatarEl = document.querySelector('.user .avatar img, .avatar-wrapper img') as HTMLImageElement;
     const usernameEl = document.querySelector('.user .name, .nickname');
     
@@ -632,122 +336,101 @@ const jianshuDetector: PlatformAuthDetector = {
       return {
         loggedIn: true,
         platform: 'jianshu',
+        // 如果从 URL 提取到了 slug，使用它
+        userId: slugMatch ? slugMatch[1] : undefined,
         nickname: usernameEl?.textContent?.trim(),
         avatar: avatarEl?.src,
       };
-    }
-    
-    // 检查登录按钮
-    const loginBtn = document.querySelector('.sign-in, .login-btn');
-    if (loginBtn) {
-      return { loggedIn: false, platform: 'jianshu' };
     }
     
     return { loggedIn: false, platform: 'jianshu' };
   },
 };
 
-/**
- * 博客园登录检测器
- */
+// ============================================================
+// 博客园检测器
+// 注意：博客园的用户主页格式为 https://home.cnblogs.com/u/{blogApp}
+// 所以 userId 应该使用 blogApp 而不是数字 ID
+// ============================================================
 const cnblogsDetector: PlatformAuthDetector = {
   id: 'cnblogs',
   urlPatterns: [/cnblogs\.com/],
   async checkLogin(): Promise<LoginState> {
     log('cnblogs', '检测登录状态...');
     const url = window.location.href;
-    log('cnblogs', '当前 URL: ' + url);
     
-    // 方法1: 检查是否在"您已登录"页面
-    // URL 包含 continue-sign-out 说明已经登录
+    // 检查是否在"您已登录"页面 - 此时需要尝试获取用户信息
     if (url.includes('continue-sign-out') || url.includes('already-signed-in')) {
-      log('cnblogs', '检测到"您已登录"页面');
-      // 尝试从页面获取用户名
-      const pageText = document.body?.textContent || '';
-      let nickname = '博客园用户';
-      // 页面可能显示用户名
-      const userMatch = pageText.match(/您已经登录|already signed in/i);
-      if (userMatch) {
-        log('cnblogs', '确认已登录状态');
+      // 尝试从 API 获取完整用户信息
+      try {
+        const res = await fetch('https://account.cnblogs.com/api/user', {
+          credentials: 'include',
+          headers: { 'Accept': 'application/json' },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.blogApp || data.displayName) {
+            log('cnblogs', '从 API 获取到用户信息', { blogApp: data.blogApp, displayName: data.displayName });
+            return {
+              loggedIn: true,
+              platform: 'cnblogs',
+              // 使用 blogApp 作为 userId，因为主页 URL 格式为 /u/{blogApp}
+              userId: data.blogApp || data.userId,
+              nickname: data.displayName || data.blogApp,
+              avatar: data.avatar,
+            };
+          }
+        }
+      } catch (e) {
+        log('cnblogs', 'API 调用失败', e);
       }
+      
       return {
         loggedIn: true,
         platform: 'cnblogs',
-        nickname: nickname,
+        nickname: '博客园用户',
       };
     }
     
-    // 方法2: 检查 Cookie 中是否有登录标记
+    // 尝试 API
     try {
-      const cookies = document.cookie;
-      log('cnblogs', 'Cookie: ' + cookies.substring(0, 200));
-      // 博客园登录后会有 .CNBlogsCookie 或 .Cnblogs.AspNetCore.Cookies
-      if (cookies.includes('.CNBlogsCookie') || cookies.includes('.Cnblogs.AspNetCore.Cookies') || 
-          cookies.includes('_ga') && cookies.includes('.cnblogs.com')) {
-        log('cnblogs', '从 Cookie 检测到可能已登录');
+      const res = await fetch('https://account.cnblogs.com/api/user', {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.blogApp || data.displayName || data.userId) {
+          log('cnblogs', '从 API 获取到用户信息', { blogApp: data.blogApp, displayName: data.displayName });
+          return {
+            loggedIn: true,
+            platform: 'cnblogs',
+            // 使用 blogApp 作为 userId，因为主页 URL 格式为 /u/{blogApp}
+            userId: data.blogApp || data.userId,
+            nickname: data.displayName || data.blogApp,
+            avatar: data.avatar,
+          };
+        }
       }
-    } catch {}
-    
-    // 方法3: 检查 DOM - 博客园登录后会显示用户名
-    const userSelectors = [
-      '#blog_nav_admin',
-      '.user-info .name',
-      '#navList a[href*="/u/"]',
-      '.navbar-user-info',
-      '#header .user-info',
-      '.header-user-info',
-      '#user_info',
-      '.dropdown-menu a[href*="/u/"]',
-    ];
-    
-    for (const selector of userSelectors) {
-      const el = document.querySelector(selector);
-      if (el?.textContent?.trim()) {
-        log('cnblogs', '从 DOM 检测到登录状态: ' + selector);
-        const avatarEl = document.querySelector('.user-avatar img, .avatar img') as HTMLImageElement;
-        return {
-          loggedIn: true,
-          platform: 'cnblogs',
-          nickname: el.textContent.trim(),
-          avatar: avatarEl?.src,
-        };
-      }
+    } catch (e) {
+      log('cnblogs', 'API 调用失败', e);
     }
     
-    // 方法4: 检查是否有退出按钮
-    const logoutSelectors = [
-      'a[href*="signout"]',
-      'a[href*="logout"]',
-      '.logout',
-      '#sign_out',
-    ];
-    
-    for (const selector of logoutSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        log('cnblogs', '检测到退出按钮，已登录: ' + selector);
-        return {
-          loggedIn: true,
-          platform: 'cnblogs',
-          nickname: '博客园用户',
-        };
-      }
-    }
-    
-    // 方法5: 检查全局变量
+    // 检查全局变量
     const win = window as any;
     if (win.currentBlogApp || win.cb_blogUserGuid) {
-      log('cnblogs', '从全局变量检测到登录状态');
       return {
         loggedIn: true,
         platform: 'cnblogs',
+        // currentBlogApp 就是用于主页 URL 的标识
+        userId: win.currentBlogApp,
         nickname: win.currentBlogApp || '博客园用户',
       };
     }
     
-    // 方法6: 检查是否在博客后台
-    if (url.includes('/admin/') || url.includes('/posts/edit') || url.includes('/posts/new')) {
-      log('cnblogs', '在博客后台，已登录');
+    // 检查退出按钮
+    const logoutEl = document.querySelector('a[href*="signout"], a[href*="logout"]');
+    if (logoutEl) {
       return {
         loggedIn: true,
         platform: 'cnblogs',
@@ -755,370 +438,141 @@ const cnblogsDetector: PlatformAuthDetector = {
       };
     }
     
-    // 方法7: 检查登录链接（如果有登录链接且文字是"登录"，则未登录）
-    const loginLink = document.querySelector('a[href*="signin"], a[href*="login"]');
-    if (loginLink && loginLink.textContent?.includes('登录')) {
-      log('cnblogs', '检测到登录链接，未登录');
-      return { loggedIn: false, platform: 'cnblogs' };
-    }
-    
-    // 方法8: 检查页面内容是否包含"您已经登录"
-    const bodyText = document.body?.textContent || '';
-    if (bodyText.includes('您已经登录') || bodyText.includes('已登录') || 
-        bodyText.includes('already signed in') || bodyText.includes('Already logged in')) {
-      log('cnblogs', '从页面内容检测到已登录');
-      return {
-        loggedIn: true,
-        platform: 'cnblogs',
-        nickname: '博客园用户',
-      };
-    }
-    
-    log('cnblogs', '未能确定登录状态，默认未登录');
     return { loggedIn: false, platform: 'cnblogs' };
   },
 };
 
-/**
- * 51CTO 登录检测器
- */
+// ============================================================
+// 51CTO 检测器 - API 优先
+// 注意：51CTO 用户主页格式为 https://blog.51cto.com/u_{userId}
+// userId 是纯数字，如 17035626
+// ============================================================
 const cto51Detector: PlatformAuthDetector = {
   id: '51cto',
   urlPatterns: [/51cto\.com/],
   async checkLogin(): Promise<LoginState> {
     log('51cto', '检测登录状态...');
-    const url = window.location.href;
-    log('51cto', '当前 URL: ' + url);
     
-    // 打印调试信息
-    const allElements = document.querySelectorAll('[class*="user"], [class*="avatar"], [class*="login"], [class*="name"]');
-    log('51cto', '找到 ' + allElements.length + ' 个可能的用户相关元素');
-    
-    // 方法1: 检查是否在个人中心页面（home.51cto.com）
-    if (url.includes('home.51cto.com')) {
-      log('51cto', '在个人中心页面');
-      // 个人中心页面如果能访问，说明已登录
-      // 检查页面是否有用户信息
-      const homeUserSelectors = [
-        '.user-info',
-        '.user-name',
-        '.user-avatar',
-        '.home-user',
-        '.profile-info',
-        '.account-info',
-        '[class*="userinfo"]',
-        '[class*="user-info"]',
-      ];
-      
-      for (const selector of homeUserSelectors) {
-        const el = document.querySelector(selector);
-        if (el) {
-          log('51cto', '在个人中心检测到用户元素: ' + selector);
-          const nameEl = el.querySelector('[class*="name"]') || el;
-          const avatarEl = document.querySelector('img[class*="avatar"], .avatar img') as HTMLImageElement;
+    // 尝试 API
+    try {
+      const res = await fetch('https://home.51cto.com/api/user/info', {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if ((data.code === 0 || data.status === 'success') && data.data) {
+          const user = data.data;
+          // userId 应该是纯数字，用于构建主页 URL
+          const userId = String(user.id || user.uid || '');
+          log('51cto', '从 API 获取到用户信息', { userId, nickname: user.name || user.nickname });
           return {
             loggedIn: true,
             platform: '51cto',
-            nickname: nameEl?.textContent?.trim() || '51CTO用户',
-            avatar: avatarEl?.src,
+            userId: userId,
+            nickname: user.name || user.nickname || '51CTO用户',
+            avatar: user.avatar || user.avatarUrl,
           };
         }
       }
+    } catch (e) {
+      log('51cto', 'API 调用失败', e);
     }
     
-    // 方法2: 检查多种 DOM 选择器
-    const userSelectors = [
-      '.user-name',
-      '.nickname',
-      '.user-info .name',
-      '.header-user-name',
-      '.nav-user-name',
-      '.top-user-name',
-      '[class*="username"]',
-      '[class*="user-name"]',
-      '[class*="nick"]',
-      '.home-header .name',
-      '.user-center .name',
-    ];
-    
-    for (const selector of userSelectors) {
-      const el = document.querySelector(selector);
-      if (el?.textContent?.trim() && !el.textContent.includes('登录') && !el.textContent.includes('注册')) {
-        log('51cto', '从 DOM 检测到登录状态: ' + selector + ' -> ' + el.textContent.trim());
-        const avatarEl = document.querySelector('.user-avatar img, .avatar img, img[class*="avatar"]') as HTMLImageElement;
-        return {
-          loggedIn: true,
-          platform: '51cto',
-          nickname: el.textContent.trim(),
-          avatar: avatarEl?.src,
-        };
-      }
+    // 尝试从页面 URL 提取用户 ID（如果在用户主页）
+    const url = window.location.href;
+    const userIdMatch = url.match(/blog\.51cto\.com\/u_(\d+)/);
+    if (userIdMatch) {
+      log('51cto', '从 URL 提取到用户 ID', { userId: userIdMatch[1] });
+      return {
+        loggedIn: true,
+        platform: '51cto',
+        userId: userIdMatch[1],
+        nickname: '51CTO用户',
+      };
     }
     
-    // 方法3: 检查头像图片（登录后通常会显示用户头像）
-    const avatarSelectors = [
-      '.user-avatar img',
-      '.avatar img',
-      'img[class*="avatar"]',
-      '.header-avatar img',
-      '.nav-avatar img',
-    ];
-    
-    for (const selector of avatarSelectors) {
-      const el = document.querySelector(selector) as HTMLImageElement;
-      if (el?.src && !el.src.includes('default') && !el.src.includes('noavatar') && el.src.length > 10) {
-        log('51cto', '从头像检测到登录状态: ' + selector);
-        return {
-          loggedIn: true,
-          platform: '51cto',
-          nickname: '51CTO用户',
-          avatar: el.src,
-        };
-      }
+    // 检查退出按钮
+    const logoutEl = document.querySelector('a[href*="logout"], a[href*="signout"]');
+    if (logoutEl) {
+      return {
+        loggedIn: true,
+        platform: '51cto',
+        nickname: '51CTO用户',
+      };
     }
     
-    // 方法4: 检查 Cookie
-    try {
-      const cookies = document.cookie;
-      log('51cto', 'Cookie: ' + cookies.substring(0, 300));
-      // 51CTO 登录后可能有的 Cookie
-      if (cookies.includes('user_id=') || cookies.includes('uid=') || 
-          cookies.includes('token=') || cookies.includes('session')) {
-        // 有用户相关 Cookie，可能已登录，但需要进一步确认
-        log('51cto', '发现可能的登录 Cookie');
-      }
-    } catch {}
-    
-    // 方法5: 检查全局变量
-    const win = window as any;
-    const possibleUserVars = [
-      win.userInfo,
-      win.USER_INFO,
-      win.currentUser,
-      win.__USER__,
-      win.user,
-    ];
-    
-    for (const user of possibleUserVars) {
-      if (user && (user.id || user.uid || user.userId || user.name || user.nickname)) {
-        log('51cto', '从全局变量检测到登录状态');
-        return {
-          loggedIn: true,
-          platform: '51cto',
-          userId: user.id || user.uid || user.userId,
-          nickname: user.name || user.nickname || user.userName || '51CTO用户',
-          avatar: user.avatar || user.avatarUrl,
-        };
-      }
-    }
-    
-    // 方法6: 检查是否有退出/注销按钮
-    const logoutSelectors = [
-      'a[href*="logout"]',
-      'a[href*="signout"]',
-      '.logout',
-      '.sign-out',
-      '[class*="logout"]',
-    ];
-    
-    for (const selector of logoutSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        log('51cto', '检测到退出按钮，已登录: ' + selector);
-        return {
-          loggedIn: true,
-          platform: '51cto',
-          nickname: '51CTO用户',
-        };
-      }
-    }
-    
-    // 方法7: 调用 51CTO API 检测登录状态
-    try {
-      log('51cto', '尝试调用 API...');
-      const res = await fetch('https://home.51cto.com/api/user/info', {
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-      
-      if (res.ok) {
-        const data = await res.json();
-        log('51cto', 'API 响应: ' + JSON.stringify(data).substring(0, 200));
-        
-        if (data.code === 0 || data.status === 'success' || data.data) {
-          const user = data.data || data.user || data;
-          if (user.id || user.uid || user.name || user.nickname) {
-            return {
-              loggedIn: true,
-              platform: '51cto',
-              userId: user.id || user.uid,
-              nickname: user.name || user.nickname || '51CTO用户',
-              avatar: user.avatar || user.avatarUrl,
-            };
-          }
-        }
-      }
-    } catch (e: any) {
-      log('51cto', 'API 调用失败: ' + e.message);
-    }
-    
-    // 方法8: 检查登录按钮（如果有明显的登录按钮，则未登录）
-    const loginBtnSelectors = [
-      '.login-btn',
-      'a[href*="login"]',
-      '.sign-in',
-      '[class*="login-btn"]',
-    ];
-    
-    for (const selector of loginBtnSelectors) {
-      const el = document.querySelector(selector);
-      if (el && (el.textContent?.includes('登录') || el.textContent?.includes('Login'))) {
-        log('51cto', '检测到登录按钮，未登录: ' + selector);
-        return { loggedIn: false, platform: '51cto' };
-      }
-    }
-    
-    log('51cto', '未能确定登录状态，默认未登录');
     return { loggedIn: false, platform: '51cto' };
   },
 };
 
-
-/**
- * 腾讯云开发者社区登录检测器
- */
+// ============================================================
+// 腾讯云开发者社区检测器 - API 优先
+// 注意：腾讯云用户主页格式为 https://cloud.tencent.com/developer/user/{userId}
+// ============================================================
 const tencentCloudDetector: PlatformAuthDetector = {
   id: 'tencent-cloud',
   urlPatterns: [/cloud\.tencent\.com/],
   async checkLogin(): Promise<LoginState> {
     log('tencent-cloud', '检测登录状态...');
-    const url = window.location.href;
-    log('tencent-cloud', '当前 URL: ' + url);
     
-    // 打印调试信息
-    const allElements = document.querySelectorAll('[class*="user"], [class*="avatar"], [class*="login"], [class*="header"]');
-    log('tencent-cloud', '找到 ' + allElements.length + ' 个可能的用户相关元素');
-    
-    // 方法1: 检查多种 DOM 选择器
-    const userSelectors = [
-      '.user-name',
-      '.com-header-user-name',
-      '.c-header-user-name',
-      '.header-user-name',
-      '.nav-user-name',
-      '.com-header-user-info .name',
-      '.user-info .name',
-      '[class*="header"] [class*="user"] [class*="name"]',
-      '[class*="user-info"] [class*="name"]',
-      '.com-2-header-user-name',
-      '.tea-header-user-name',
+    // 尝试多个 API 端点
+    const apiEndpoints = [
+      'https://cloud.tencent.com/developer/api/user/info',
+      'https://cloud.tencent.com/developer/api/user/current',
     ];
     
-    for (const selector of userSelectors) {
-      const el = document.querySelector(selector);
-      if (el?.textContent?.trim() && !el.textContent.includes('登录') && !el.textContent.includes('注册')) {
-        log('tencent-cloud', '从 DOM 检测到登录状态: ' + selector + ' -> ' + el.textContent.trim());
-        const avatarEl = document.querySelector('.user-avatar img, .com-header-user-avatar img, [class*="avatar"] img') as HTMLImageElement;
-        return {
-          loggedIn: true,
-          platform: 'tencent-cloud',
-          nickname: el.textContent.trim(),
-          avatar: avatarEl?.src,
-        };
+    for (const endpoint of apiEndpoints) {
+      try {
+        const res = await fetch(endpoint, {
+          credentials: 'include',
+          headers: { 'Accept': 'application/json' },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if ((data.code === 0 || data.ret === 0) && data.data) {
+            const user = data.data;
+            const userId = String(user.uin || user.uid || user.id || '');
+            const nickname = user.name || user.nickname || user.nick;
+            
+            // 确保有有效的用户信息
+            if (userId && nickname && nickname !== '腾讯云用户') {
+              log('tencent-cloud', '从 API 获取到用户信息', { userId, nickname });
+              return {
+                loggedIn: true,
+                platform: 'tencent-cloud',
+                userId: userId,
+                nickname: nickname,
+                avatar: user.avatar || user.avatarUrl,
+              };
+            }
+          }
+        }
+      } catch (e) {
+        log('tencent-cloud', `API ${endpoint} 调用失败`, e);
       }
     }
     
-    // 方法2: 检查头像图片
-    const avatarSelectors = [
-      '.user-avatar img',
-      '.com-header-user-avatar img',
-      '.c-header-user-avatar img',
-      '[class*="header"] [class*="avatar"] img',
-      'img[class*="avatar"]',
-    ];
-    
-    for (const selector of avatarSelectors) {
-      const el = document.querySelector(selector) as HTMLImageElement;
-      if (el?.src && !el.src.includes('default') && !el.src.includes('noavatar') && el.src.length > 20) {
-        log('tencent-cloud', '从头像检测到登录状态: ' + selector);
-        return {
-          loggedIn: true,
-          platform: 'tencent-cloud',
-          nickname: '腾讯云用户',
-          avatar: el.src,
-        };
-      }
-    }
-    
-    // 方法3: 检查全局变量
-    const win = window as any;
-    const possibleUserVars = [
-      win.userInfo,
-      win.USER_INFO,
-      win.__USER__,
-      win.currentUser,
-      win.QCLOUD_USER,
-      win.__INITIAL_STATE__?.user,
-    ];
-    
-    for (const user of possibleUserVars) {
-      if (user && (user.uin || user.uid || user.id || user.name || user.nickname)) {
-        log('tencent-cloud', '从全局变量检测到登录状态');
-        return {
-          loggedIn: true,
-          platform: 'tencent-cloud',
-          userId: user.uin || user.uid || user.id,
-          nickname: user.name || user.nickname || user.nick || '腾讯云用户',
-          avatar: user.avatar || user.avatarUrl,
-        };
-      }
-    }
-    
-    // 方法4: 检查 Cookie
+    // 检查页面上的用户信息元素
     try {
-      const cookies = document.cookie;
-      log('tencent-cloud', 'Cookie: ' + cookies.substring(0, 300));
-      // 腾讯云登录后会有 uin、skey 等 Cookie
-      if (cookies.includes('uin=') || cookies.includes('skey=') || 
-          cookies.includes('p_uin=') || cookies.includes('pt4_token=')) {
-        log('tencent-cloud', '从 Cookie 检测到可能已登录');
-        // 有腾讯系 Cookie，很可能已登录
+      // 腾讯云开发者社区页面可能有用户头像或昵称元素
+      const userAvatarEl = document.querySelector('.com-header-user-avatar img, .user-avatar img, [class*="avatar"] img') as HTMLImageElement;
+      const userNameEl = document.querySelector('.com-header-user-name, .user-name, [class*="username"]');
+      
+      if (userAvatarEl?.src || userNameEl?.textContent?.trim()) {
+        log('tencent-cloud', '从 DOM 检测到登录状态');
         return {
           loggedIn: true,
           platform: 'tencent-cloud',
-          nickname: '腾讯云用户',
+          nickname: userNameEl?.textContent?.trim() || '腾讯云用户',
+          avatar: userAvatarEl?.src,
         };
       }
     } catch {}
     
-    // 方法5: 检查是否有退出按钮
-    const logoutSelectors = [
-      'a[href*="logout"]',
-      'a[href*="signout"]',
-      '.logout',
-      '.sign-out',
-      '[class*="logout"]',
-      'a[href*="cloud.tencent.com/logout"]',
-    ];
-    
-    for (const selector of logoutSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        log('tencent-cloud', '检测到退出按钮，已登录: ' + selector);
-        return {
-          loggedIn: true,
-          platform: 'tencent-cloud',
-          nickname: '腾讯云用户',
-        };
-      }
-    }
-    
-    // 方法6: 检查是否在个人中心或控制台
-    if (url.includes('/developer/user') || url.includes('/console') || 
-        url.includes('/account') || url.includes('/profile')) {
-      log('tencent-cloud', '在个人中心/控制台，已登录');
+    // 检查退出按钮
+    const logoutEl = document.querySelector('a[href*="logout"], [class*="logout"]');
+    if (logoutEl) {
       return {
         loggedIn: true,
         platform: 'tencent-cloud',
@@ -1126,333 +580,280 @@ const tencentCloudDetector: PlatformAuthDetector = {
       };
     }
     
-    // 方法7: 调用腾讯云 API
-    try {
-      log('tencent-cloud', '尝试调用 API...');
-      const res = await fetch('https://cloud.tencent.com/developer/api/user/info', {
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-      
-      if (res.ok) {
-        const data = await res.json();
-        log('tencent-cloud', 'API 响应: ' + JSON.stringify(data).substring(0, 200));
-        
-        if (data.code === 0 || data.ret === 0 || data.data) {
-          const user = data.data || data.user || data;
-          if (user.uin || user.uid || user.id || user.name || user.nickname) {
-            return {
-              loggedIn: true,
-              platform: 'tencent-cloud',
-              userId: user.uin || user.uid || user.id,
-              nickname: user.name || user.nickname || '腾讯云用户',
-              avatar: user.avatar || user.avatarUrl,
-            };
-          }
-        }
-      }
-    } catch (e: any) {
-      log('tencent-cloud', 'API 调用失败: ' + e.message);
-    }
-    
-    // 方法8: 检查登录按钮（如果有明显的登录按钮，则未登录）
-    const loginBtnSelectors = [
-      '.login-btn',
-      'a[href*="login"]',
-      '.sign-in',
-      '[class*="login"]',
-    ];
-    
-    for (const selector of loginBtnSelectors) {
-      const el = document.querySelector(selector);
-      if (el && (el.textContent?.includes('登录') || el.textContent?.includes('Login'))) {
-        log('tencent-cloud', '检测到登录按钮，未登录: ' + selector);
-        return { loggedIn: false, platform: 'tencent-cloud' };
-      }
-    }
-    
-    log('tencent-cloud', '未能确定登录状态，默认未登录');
     return { loggedIn: false, platform: 'tencent-cloud' };
   },
 };
 
-/**
- * 阿里云开发者社区登录检测器
- */
+// ============================================================
+// 阿里云开发者社区检测器
+// 注意：阿里云用户主页格式为 https://developer.aliyun.com/profile/{userId}
+// userId 是数字 ID
+// 
+// 检测策略：
+// 1. 优先尝试 API（返回 200 说明已登录）
+// 2. 然后检测页面 DOM 中的用户信息
+// 3. 最后尝试从页面全局变量获取用户信息
+// ============================================================
 const aliyunDetector: PlatformAuthDetector = {
   id: 'aliyun',
-  urlPatterns: [/developer\.aliyun\.com/, /aliyun\.com/],
+  // 只匹配开发者社区域名
+  urlPatterns: [/developer\.aliyun\.com/],
   async checkLogin(): Promise<LoginState> {
     log('aliyun', '检测登录状态...');
-    const url = window.location.href;
-    log('aliyun', '当前 URL: ' + url);
     
-    // 打印调试信息
-    const allElements = document.querySelectorAll('[class*="user"], [class*="avatar"], [class*="login"], [class*="header"]');
-    log('aliyun', '找到 ' + allElements.length + ' 个可能的用户相关元素');
-    
-    // 方法1: 检查多种 DOM 选择器
-    const userSelectors = [
-      '.aliyun-user-name',
-      '.user-name',
-      '.aliyun-console-user-name',
-      '.aliyun-header-user-name',
-      '.aliyun-topbar-user-name',
-      '.aliyun-nav-user-name',
-      '.aliyun-header-user-info .name',
-      '[class*="aliyun"] [class*="user"] [class*="name"]',
-      '[class*="header"] [class*="user"] [class*="name"]',
-      '.aliyun-com-header-user-name',
-      '.aliyun-com-header-user-info .name',
-      '.aliyun-topbar-user-info .name',
-      '.aliyun-header-user-nick',
-      '.aliyun-header-nick',
-    ];
-    
-    for (const selector of userSelectors) {
-      const el = document.querySelector(selector);
-      if (el?.textContent?.trim() && !el.textContent.includes('登录') && !el.textContent.includes('注册') && !el.textContent.includes('免费注册')) {
-        log('aliyun', '从 DOM 检测到登录状态: ' + selector + ' -> ' + el.textContent.trim());
-        const avatarEl = document.querySelector('.aliyun-user-avatar img, .user-avatar img, [class*="avatar"] img') as HTMLImageElement;
-        return {
-          loggedIn: true,
-          platform: 'aliyun',
-          nickname: el.textContent.trim(),
-          avatar: avatarEl?.src,
-        };
-      }
-    }
-    
-    // 方法2: 检查头像图片
-    const avatarSelectors = [
-      '.aliyun-user-avatar img',
-      '.user-avatar img',
-      '.aliyun-header-user-avatar img',
-      '[class*="aliyun"] [class*="avatar"] img',
-      'img[class*="avatar"]',
-    ];
-    
-    for (const selector of avatarSelectors) {
-      const el = document.querySelector(selector) as HTMLImageElement;
-      if (el?.src && !el.src.includes('default') && !el.src.includes('noavatar') && el.src.length > 20) {
-        log('aliyun', '从头像检测到登录状态: ' + selector);
-        return {
-          loggedIn: true,
-          platform: 'aliyun',
-          nickname: '阿里云用户',
-          avatar: el.src,
-        };
-      }
-    }
-    
-    // 方法3: 检查 Cookie
+    // 1. 优先尝试 API - getUser 返回 200 说明已登录
     try {
-      const cookies = document.cookie;
-      log('aliyun', 'Cookie: ' + cookies.substring(0, 300));
-      // 阿里云登录后会有 login_aliyunid_pk、aliyun_choice 等 Cookie
-      if (cookies.includes('login_aliyunid_pk=') || cookies.includes('aliyun_choice=') || 
-          cookies.includes('login_aliyunid=') || cookies.includes('aliyun_lang=') ||
-          cookies.includes('login_aliyunid_csrf=') || cookies.includes('aui_') ||
-          cookies.includes('XSRF-TOKEN=')) {
-        log('aliyun', '从 Cookie 检测到可能已登录');
-        // 有阿里云 Cookie，很可能已登录
+      const res = await fetch('https://developer.aliyun.com/developer/api/my/user/getUser', {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+      
+      log('aliyun', 'API getUser 响应状态', { status: res.status });
+      
+      if (res.ok) {
+        const text = await res.text();
+        log('aliyun', 'API getUser 响应内容', text.substring(0, 500));
+        
+        try {
+          const data = JSON.parse(text);
+          log('aliyun', 'API getUser 解析结果', data);
+          
+          // 检查各种可能的响应结构
+          // 阿里云 API 可能返回 { success: true, data: {...} } 或 { code: 0, data: {...} }
+          const userData = data.data || data.result || data.content || data;
+          
+          // 如果 API 返回 200 且有数据，说明已登录
+          if (userData && typeof userData === 'object') {
+            const nickname = userData.nickName || userData.nickname || userData.name || userData.loginId || userData.userName;
+            const userId = userData.userId || userData.id || userData.uid || userData.accountId;
+            const avatar = userData.avatarUrl || userData.avatar || userData.headUrl;
+            
+            log('aliyun', '提取的用户数据', { userId, nickname, avatar });
+            
+            // 只要有 userId 或 nickname，就认为已登录
+            if (userId || nickname) {
+              const validNickname = nickname && 
+                nickname !== '阿里云用户' && 
+                !nickname.startsWith('aliyun_') 
+                  ? nickname 
+                  : '阿里云开发者';
+              
+              log('aliyun', '从 API 检测到登录状态', { userId, nickname: validNickname });
+              return {
+                loggedIn: true,
+                platform: 'aliyun',
+                userId: userId ? String(userId) : undefined,
+                nickname: validNickname,
+                avatar: avatar,
+              };
+            }
+          }
+          
+          // 检查是否明确返回未登录
+          if (data.success === false || data.code === 401 || data.code === 403) {
+            log('aliyun', 'API 明确返回未登录');
+            return { loggedIn: false, platform: 'aliyun' };
+          }
+        } catch (parseErr) {
+          // JSON 解析失败，但 HTTP 200 可能意味着已登录
+          log('aliyun', 'API 响应解析失败，但返回 200', parseErr);
+        }
+      }
+    } catch (e) {
+      log('aliyun', 'API getUser 调用失败', e);
+    }
+    
+    // 2. 从页面 DOM 检测
+    try {
+      // 检查登录按钮是否存在（使用有效的 CSS 选择器）
+      const loginBtnSelectors = [
+        '.aliyun-header-login',
+        'a[href*="login.aliyun"]',
+        'a[href*="/login"]',
+        '[class*="login-btn"]',
+        '[class*="loginBtn"]',
+      ];
+      
+      let hasLoginBtn = false;
+      for (const selector of loginBtnSelectors) {
+        try {
+          const el = document.querySelector(selector);
+          if (el && (el.textContent?.includes('登录') || el.getAttribute('href')?.includes('login'))) {
+            hasLoginBtn = true;
+            log('aliyun', '找到登录按钮', { selector, text: el.textContent });
+            break;
+          }
+        } catch {}
+      }
+      
+      // 检查所有按钮是否有"登录"文字
+      if (!hasLoginBtn) {
+        const allButtons = document.querySelectorAll('button, a');
+        for (const btn of allButtons) {
+          if (btn.textContent?.trim() === '登录' || btn.textContent?.trim() === '立即登录') {
+            hasLoginBtn = true;
+            log('aliyun', '找到登录按钮（文字匹配）', { text: btn.textContent });
+            break;
+          }
+        }
+      }
+      
+      // 获取用户头像
+      const avatarSelectors = [
+        '.aliyun-header-user img',
+        '.aliyun-user-avatar img',
+        'header img[class*="avatar"]',
+        'header img[src*="avatar"]',
+        '[class*="user-avatar"] img',
+        '[class*="userAvatar"] img',
+      ];
+      
+      let avatarEl: HTMLImageElement | null = null;
+      for (const selector of avatarSelectors) {
+        try {
+          avatarEl = document.querySelector(selector) as HTMLImageElement;
+          if (avatarEl?.src && !avatarEl.src.includes('default') && avatarEl.src.startsWith('http')) {
+            log('aliyun', '找到用户头像', { selector, src: avatarEl.src });
+            break;
+          }
+          avatarEl = null;
+        } catch {}
+      }
+      
+      log('aliyun', 'DOM 检测结果', { hasLoginBtn, hasAvatar: !!avatarEl?.src });
+      
+      // 如果有用户头像且没有登录按钮，认为已登录
+      if (avatarEl?.src && !hasLoginBtn) {
+        log('aliyun', '从 DOM 检测到登录状态（有头像无登录按钮）');
         return {
           loggedIn: true,
           platform: 'aliyun',
-          nickname: '阿里云用户',
+          nickname: '阿里云开发者',
+          avatar: avatarEl.src,
         };
       }
-    } catch {}
-    
-    // 方法4: 检查全局变量
-    const win = window as any;
-    const possibleUserVars = [
-      win.userInfo,
-      win.USER_INFO,
-      win.__USER__,
-      win.currentUser,
-      win.ALIYUN_USER,
-      win.__INITIAL_STATE__?.user,
-      win.globalData?.user,
-    ];
-    
-    for (const user of possibleUserVars) {
-      if (user && (user.uid || user.id || user.name || user.nickname || user.loginId)) {
-        log('aliyun', '从全局变量检测到登录状态');
-        return {
-          loggedIn: true,
-          platform: 'aliyun',
-          userId: user.uid || user.id || user.loginId,
-          nickname: user.name || user.nickname || user.loginId || '阿里云用户',
-          avatar: user.avatar || user.avatarUrl,
-        };
+      
+      // 如果明确有登录按钮且没有头像，说明未登录
+      if (hasLoginBtn && !avatarEl?.src) {
+        log('aliyun', '检测到登录按钮且无头像，判定为未登录');
+        return { loggedIn: false, platform: 'aliyun' };
       }
+    } catch (e) {
+      log('aliyun', 'DOM 检测异常', e);
     }
     
-    // 方法5: 检查是否有退出按钮
-    const logoutSelectors = [
-      'a[href*="logout"]',
-      'a[href*="signout"]',
-      '.logout',
-      '.sign-out',
-      '[class*="logout"]',
-      'a[href*="aliyun.com/logout"]',
-    ];
-    
-    for (const selector of logoutSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        log('aliyun', '检测到退出按钮，已登录: ' + selector);
-        return {
-          loggedIn: true,
-          platform: 'aliyun',
-          nickname: '阿里云用户',
-        };
+    // 3. 尝试从页面全局变量获取用户信息
+    try {
+      const win = window as any;
+      // 阿里云可能在全局变量中存储用户信息
+      const possibleUserVars = [
+        win.__INITIAL_STATE__?.user,
+        win.__USER_INFO__,
+        win.USER_INFO,
+        win.userInfo,
+        win.__NUXT__?.state?.user,
+        win.g_config?.user,
+      ];
+      
+      for (const userData of possibleUserVars) {
+        if (userData && (userData.userId || userData.id || userData.nickName)) {
+          const userId = userData.userId || userData.id;
+          const nickname = userData.nickName || userData.nickname || userData.name;
+          
+          if (userId || nickname) {
+            log('aliyun', '从全局变量检测到登录状态', { userId, nickname });
+            return {
+              loggedIn: true,
+              platform: 'aliyun',
+              userId: userId ? String(userId) : undefined,
+              nickname: nickname || '阿里云开发者',
+              avatar: userData.avatarUrl || userData.avatar,
+            };
+          }
+        }
       }
+    } catch (e) {
+      log('aliyun', '全局变量检测异常', e);
     }
     
-    // 方法6: 检查是否在控制台或个人中心
-    if (url.includes('/console') || url.includes('/account') || 
-        url.includes('/profile') || url.includes('/home.htm') ||
-        url.includes('/developer/my')) {
-      log('aliyun', '在控制台/个人中心，已登录');
-      return {
-        loggedIn: true,
-        platform: 'aliyun',
-        nickname: '阿里云用户',
-      };
-    }
-    
-    // 方法7: 检查是否在登录页面但已登录（页面显示"您已登录"）
-    const bodyText = document.body?.textContent || '';
-    if (bodyText.includes('您已登录') || bodyText.includes('已登录') || 
-        bodyText.includes('欢迎回来') || bodyText.includes('Welcome back')) {
-      log('aliyun', '从页面内容检测到已登录');
-      return {
-        loggedIn: true,
-        platform: 'aliyun',
-        nickname: '阿里云用户',
-      };
-    }
-    
-    // 方法8: 检查登录按钮（如果有明显的登录按钮，则未登录）
-    const loginBtnSelectors = [
-      '.aliyun-login-btn',
-      'a[href*="login"]',
-      '.sign-in',
-      '[class*="login"]',
-    ];
-    
-    let hasLoginBtn = false;
-    for (const selector of loginBtnSelectors) {
-      const el = document.querySelector(selector);
-      if (el && (el.textContent?.includes('登录') || el.textContent?.includes('Login') || el.textContent?.includes('免费注册'))) {
-        hasLoginBtn = true;
-        log('aliyun', '检测到登录按钮: ' + selector);
-        break;
+    // 4. 备用 API
+    try {
+      const res = await fetch('https://developer.aliyun.com/developer/api/user/getUserInfo', {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+      
+      log('aliyun', 'API getUserInfo 响应状态', { status: res.status });
+      
+      if (res.ok) {
+        const data = await res.json();
+        const userData = data.data || data.result || data;
+        
+        if (data.success !== false && userData) {
+          const nickname = userData.nickName || userData.nickname || userData.name;
+          const userId = userData.userId || userData.id;
+          
+          if (userId || nickname) {
+            log('aliyun', '从备用 API 检测到登录状态', { userId, nickname });
+            return {
+              loggedIn: true,
+              platform: 'aliyun',
+              userId: userId ? String(userId) : undefined,
+              nickname: nickname || '阿里云开发者',
+              avatar: userData.avatarUrl || userData.avatar,
+            };
+          }
+        }
       }
+    } catch (e) {
+      log('aliyun', 'API getUserInfo 调用失败', e);
     }
     
-    // 如果在登录页面，检查是否有登录成功的标志
-    if (url.includes('login.htm') || url.includes('signin')) {
-      // 检查是否有跳转提示或成功提示
-      if (bodyText.includes('登录成功') || bodyText.includes('正在跳转')) {
-        log('aliyun', '登录页面显示成功');
-        return {
-          loggedIn: true,
-          platform: 'aliyun',
-          nickname: '阿里云用户',
-        };
-      }
-    }
-    
-    if (hasLoginBtn) {
-      log('aliyun', '检测到登录按钮，未登录');
-      return { loggedIn: false, platform: 'aliyun' };
-    }
-    
-    log('aliyun', '未能确定登录状态，默认未登录');
+    log('aliyun', '所有检测方式都未能确认登录状态，判定为未登录');
     return { loggedIn: false, platform: 'aliyun' };
   },
 };
 
-/**
- * 思否登录检测器
- */
+// ============================================================
+// 思否检测器 - API 优先
+// ============================================================
 const segmentfaultDetector: PlatformAuthDetector = {
   id: 'segmentfault',
   urlPatterns: [/segmentfault\.com/],
   async checkLogin(): Promise<LoginState> {
     log('segmentfault', '检测登录状态...');
-    const url = window.location.href;
-    log('segmentfault', '当前 URL: ' + url);
     
-    // 打印调试信息
-    const allElements = document.querySelectorAll('[class*="user"], [class*="avatar"], [class*="login"], [class*="header"]');
-    log('segmentfault', '找到 ' + allElements.length + ' 个可能的用户相关元素');
-    
-    // 方法1: 检查多种 DOM 选择器
-    const userSelectors = [
-      '.user-name',
-      '.nav-user-name',
-      '.dropdown-toggle .name',
-      '.header-user-name',
-      '.nav-user .name',
-      '.user-dropdown .name',
-      '.header-nav .user-name',
-      '[class*="user"] [class*="name"]',
-      '.navbar-user .name',
-      '.top-nav .user-name',
-      '.sf-header .user-name',
-      '.header-right .user-name',
-    ];
-    
-    for (const selector of userSelectors) {
-      const el = document.querySelector(selector);
-      if (el?.textContent?.trim() && !el.textContent.includes('登录') && !el.textContent.includes('注册')) {
-        log('segmentfault', '从 DOM 检测到登录状态: ' + selector + ' -> ' + el.textContent.trim());
-        const avatarEl = document.querySelector('.user-avatar img, .nav-user-avatar img, [class*="avatar"] img') as HTMLImageElement;
-        return {
-          loggedIn: true,
-          platform: 'segmentfault',
-          nickname: el.textContent.trim(),
-          avatar: avatarEl?.src,
-        };
+    // 尝试 API
+    try {
+      const res = await fetch('https://segmentfault.com/api/user/current', {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === 0 && data.data) {
+          const user = data.data;
+          log('segmentfault', '从 API 获取到用户信息', { nickname: user.name });
+          return {
+            loggedIn: true,
+            platform: 'segmentfault',
+            userId: String(user.id),
+            nickname: user.name || user.nickname || '思否用户',
+            avatar: user.avatar || user.avatarUrl,
+            meta: {
+              followersCount: user.followers,
+              articlesCount: user.articles,
+            },
+          };
+        }
       }
+    } catch (e) {
+      log('segmentfault', 'API 调用失败', e);
     }
     
-    // 方法2: 检查头像图片
-    const avatarSelectors = [
-      '.user-avatar img',
-      '.nav-user-avatar img',
-      '.header-user-avatar img',
-      '[class*="avatar"] img',
-      'img[class*="avatar"]',
-      '.navbar-user img',
-      '.header-right img[class*="avatar"]',
-    ];
-    
-    for (const selector of avatarSelectors) {
-      const el = document.querySelector(selector) as HTMLImageElement;
-      if (el?.src && !el.src.includes('default') && !el.src.includes('noavatar') && el.src.length > 20) {
-        log('segmentfault', '从头像检测到登录状态: ' + selector + ' -> ' + el.src.substring(0, 50));
-        return {
-          loggedIn: true,
-          platform: 'segmentfault',
-          nickname: '思否用户',
-          avatar: el.src,
-        };
-      }
-    }
-    
-    // 方法3: 检查全局变量
+    // 检查全局变量
     const win = window as any;
-    log('segmentfault', '检查全局变量...');
-    
     if (win.SF?.user?.id) {
-      log('segmentfault', '从 SF.user 检测到登录状态');
       return {
         loggedIn: true,
         platform: 'segmentfault',
@@ -1462,162 +863,49 @@ const segmentfaultDetector: PlatformAuthDetector = {
       };
     }
     
-    const possibleUserVars = [
-      { name: 'userInfo', value: win.userInfo },
-      { name: '__USER__', value: win.__USER__ },
-      { name: 'currentUser', value: win.currentUser },
-      { name: '__INITIAL_STATE__.user', value: win.__INITIAL_STATE__?.user },
-      { name: '__NUXT__.state.user', value: win.__NUXT__?.state?.user },
-    ];
-    
-    for (const { name, value } of possibleUserVars) {
-      if (value && (value.id || value.uid || value.name || value.nickname)) {
-        log('segmentfault', '从全局变量检测到登录状态: ' + name);
-        return {
-          loggedIn: true,
-          platform: 'segmentfault',
-          userId: String(value.id || value.uid),
-          nickname: value.name || value.nickname || '思否用户',
-          avatar: value.avatar || value.avatarUrl,
-        };
-      }
+    // 检查退出按钮
+    const logoutEl = document.querySelector('a[href*="logout"], a[href*="/user/logout"]');
+    if (logoutEl) {
+      return {
+        loggedIn: true,
+        platform: 'segmentfault',
+        nickname: '思否用户',
+      };
     }
     
-    // 方法4: 检查 Cookie
-    try {
-      const cookies = document.cookie;
-      log('segmentfault', 'Cookie: ' + cookies.substring(0, 300));
-      // 思否登录后会有 PHPSESSID、sf_remember 等 Cookie
-      if (cookies.includes('sf_remember=') || cookies.includes('SFUID=') || 
-          cookies.includes('sf_token=') || cookies.includes('Hm_lvt_')) {
-        log('segmentfault', '从 Cookie 检测到可能已登录');
-        // 有思否 Cookie，可能已登录，但需要进一步确认
-      }
-    } catch {}
-    
-    // 方法5: 检查是否有退出按钮
-    const logoutSelectors = [
-      'a[href*="logout"]',
-      'a[href*="signout"]',
-      '.logout',
-      '.sign-out',
-      '[class*="logout"]',
-      'a[href*="/user/logout"]',
-    ];
-    
-    for (const selector of logoutSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        log('segmentfault', '检测到退出按钮，已登录: ' + selector);
-        return {
-          loggedIn: true,
-          platform: 'segmentfault',
-          nickname: '思否用户',
-        };
-      }
-    }
-    
-    // 方法6: 检查是否在个人中心
-    if (url.includes('/u/') || url.includes('/user/') || url.includes('/setting')) {
-      const pageUserEl = document.querySelector('.user-info, .profile-info, .user-center');
-      if (pageUserEl) {
-        log('segmentfault', '在个人中心，已登录');
-        return {
-          loggedIn: true,
-          platform: 'segmentfault',
-          nickname: '思否用户',
-        };
-      }
-    }
-    
-    // 方法7: 调用思否 API
-    try {
-      log('segmentfault', '尝试调用 API...');
-      const res = await fetch('https://segmentfault.com/api/user/current', {
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-      
-      if (res.ok) {
-        const data = await res.json();
-        log('segmentfault', 'API 响应: ' + JSON.stringify(data).substring(0, 200));
-        
-        if (data.status === 0 || data.data?.id || data.user?.id || data.id) {
-          const user = data.data || data.user || data;
-          if (user.id || user.name || user.nickname) {
-            return {
-              loggedIn: true,
-              platform: 'segmentfault',
-              userId: String(user.id),
-              nickname: user.name || user.nickname || '思否用户',
-              avatar: user.avatar || user.avatarUrl,
-            };
-          }
-        }
-      }
-    } catch (e: any) {
-      log('segmentfault', 'API 调用失败: ' + e.message);
-    }
-    
-    // 方法8: 检查登录按钮（如果有明显的登录按钮，则未登录）
-    const loginBtnSelectors = [
-      '.login-btn',
-      'a[href*="login"]',
-      '.sign-in',
-      '[class*="login"]',
-      '.header-login-btn',
-    ];
-    
-    for (const selector of loginBtnSelectors) {
-      const el = document.querySelector(selector);
-      if (el && (el.textContent?.includes('登录') || el.textContent?.includes('Login'))) {
-        log('segmentfault', '检测到登录按钮，未登录: ' + selector);
-        return { loggedIn: false, platform: 'segmentfault' };
-      }
-    }
-    
-    log('segmentfault', '未能确定登录状态，默认未登录');
     return { loggedIn: false, platform: 'segmentfault' };
   },
 };
 
-/**
- * B站专栏登录检测器
- */
+// ============================================================
+// B站专栏检测器 - API 优先
+// ============================================================
 const bilibiliDetector: PlatformAuthDetector = {
   id: 'bilibili',
   urlPatterns: [/bilibili\.com/],
   async checkLogin(): Promise<LoginState> {
     log('bilibili', '检测登录状态...');
     
-    // 方法1: 检查 DOM
-    const avatarEl = document.querySelector('.header-avatar-wrap img, .bili-avatar img') as HTMLImageElement;
-    const usernameEl = document.querySelector('.header-entry-mini .nickname, .user-name');
-    
-    if (avatarEl?.src && !avatarEl.src.includes('noface')) {
-      return {
-        loggedIn: true,
-        platform: 'bilibili',
-        nickname: usernameEl?.textContent?.trim(),
-        avatar: avatarEl.src,
-      };
-    }
-    
-    // 方法2: 调用 API
+    // 优先使用 API（这个 API 非常可靠）
     try {
-      const res = await fetch('https://api.bilibili.com/x/web-interface/nav', { credentials: 'include' });
+      const res = await fetch('https://api.bilibili.com/x/web-interface/nav', {
+        credentials: 'include',
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.code === 0 && data.data?.isLogin) {
-          log('bilibili', '从 API 检测到登录状态');
+          const user = data.data;
+          log('bilibili', '从 API 获取到用户信息', { nickname: user.uname });
           return {
             loggedIn: true,
             platform: 'bilibili',
-            userId: String(data.data.mid),
-            nickname: data.data.uname,
-            avatar: data.data.face,
+            userId: String(user.mid),
+            nickname: user.uname,
+            avatar: user.face,
+            meta: {
+              level: user.level_info?.current_level,
+              followersCount: user.follower,
+            },
           };
         }
       }
@@ -1629,111 +917,59 @@ const bilibiliDetector: PlatformAuthDetector = {
   },
 };
 
-/**
- * 开源中国登录检测器
- */
+// ============================================================
+// 开源中国检测器 - API 优先
+// ============================================================
 const oschinaDetector: PlatformAuthDetector = {
   id: 'oschina',
   urlPatterns: [/oschina\.net/],
   async checkLogin(): Promise<LoginState> {
     log('oschina', '检测登录状态...');
-    const url = window.location.href;
-    log('oschina', '当前 URL: ' + url);
     
-    // 打印调试信息
-    const allElements = document.querySelectorAll('[class*="user"], [class*="avatar"], [class*="login"], [class*="header"]');
-    log('oschina', '找到 ' + allElements.length + ' 个可能的用户相关元素');
-    
-    // 方法1: 检查多种 DOM 选择器
-    const userSelectors = [
-      '.user-name',
-      '.current-user-name',
-      '.user-info .name',
-      '.header-user-name',
-      '.nav-user-name',
-      '.user-dropdown .name',
-      '.user-dropdown-toggle .name',
-      '.header-login-wrap .name',
-      '.header-user-info .name',
-      '[class*="user"] [class*="name"]',
-      '.current-user .name',
-      '.logged-user .name',
-      '.header-nav .user-name',
-      '.top-nav .user-name',
-      '.main-nav .user-name',
-    ];
-    
-    for (const selector of userSelectors) {
-      const el = document.querySelector(selector);
-      if (el?.textContent?.trim() && !el.textContent.includes('登录') && !el.textContent.includes('注册')) {
-        log('oschina', '从 DOM 检测到登录状态: ' + selector + ' -> ' + el.textContent.trim());
-        const avatarEl = document.querySelector('.user-avatar img, .current-user-avatar img, [class*="avatar"] img') as HTMLImageElement;
-        return {
-          loggedIn: true,
-          platform: 'oschina',
-          nickname: el.textContent.trim(),
-          avatar: avatarEl?.src,
-        };
+    // 尝试 API
+    try {
+      const res = await fetch('https://www.oschina.net/action/user/info', {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.code === 0 || data.result?.id || data.id) {
+          const user = data.result || data;
+          log('oschina', '从 API 获取到用户信息', { nickname: user.name });
+          return {
+            loggedIn: true,
+            platform: 'oschina',
+            userId: String(user.id),
+            nickname: user.name || user.nickname || '开源中国用户',
+            avatar: user.portrait || user.avatar,
+            meta: {
+              followersCount: user.fansCount,
+              articlesCount: user.blogCount,
+            },
+          };
+        }
       }
+    } catch (e) {
+      log('oschina', 'API 调用失败', e);
     }
     
-    // 方法2: 检查头像图片
-    const avatarSelectors = [
-      '.user-avatar img',
-      '.current-user-avatar img',
-      '.header-user-avatar img',
-      '[class*="avatar"] img',
-      'img[class*="avatar"]',
-      '.header-login-wrap img',
-      '.user-dropdown img',
-    ];
-    
-    for (const selector of avatarSelectors) {
-      const el = document.querySelector(selector) as HTMLImageElement;
-      if (el?.src && !el.src.includes('default') && !el.src.includes('noavatar') && 
-          !el.src.includes('no_portrait') && el.src.length > 20) {
-        log('oschina', '从头像检测到登录状态: ' + selector + ' -> ' + el.src.substring(0, 50));
-        return {
-          loggedIn: true,
-          platform: 'oschina',
-          nickname: '开源中国用户',
-          avatar: el.src,
-        };
-      }
-    }
-    
-    // 方法3: 检查全局变量
+    // 检查全局变量
     const win = window as any;
-    log('oschina', '检查全局变量...');
-    const possibleUserVars = [
-      { name: 'G_USER', value: win.G_USER },
-      { name: 'currentUser', value: win.currentUser },
-      { name: 'userInfo', value: win.userInfo },
-      { name: '__USER__', value: win.__USER__ },
-      { name: 'OSC_USER', value: win.OSC_USER },
-    ];
-    
-    for (const { name, value } of possibleUserVars) {
-      if (value && (value.id || value.uid || value.name || value.nickname)) {
-        log('oschina', '从全局变量检测到登录状态: ' + name);
-        return {
-          loggedIn: true,
-          platform: 'oschina',
-          userId: String(value.id || value.uid),
-          nickname: value.name || value.nickname || '开源中国用户',
-          avatar: value.portrait || value.avatar,
-        };
-      }
+    if (win.G_USER?.id) {
+      return {
+        loggedIn: true,
+        platform: 'oschina',
+        userId: String(win.G_USER.id),
+        nickname: win.G_USER.name || '开源中国用户',
+        avatar: win.G_USER.portrait,
+      };
     }
     
-    // 方法4: 检查 Cookie
+    // 检查 Cookie
     try {
       const cookies = document.cookie;
-      log('oschina', 'Cookie: ' + cookies.substring(0, 300));
-      // 开源中国登录后会有 oscid、user 等 Cookie
-      if (cookies.includes('oscid=') || cookies.includes('user=') || 
-          cookies.includes('_user_') || cookies.includes('oschina_')) {
-        log('oschina', '从 Cookie 检测到可能已登录');
+      if (cookies.includes('oscid=') || cookies.includes('user=')) {
         return {
           loggedIn: true,
           platform: 'oschina',
@@ -1742,93 +978,9 @@ const oschinaDetector: PlatformAuthDetector = {
       }
     } catch {}
     
-    // 方法5: 检查是否有退出按钮
-    const logoutSelectors = [
-      'a[href*="logout"]',
-      'a[href*="signout"]',
-      '.logout',
-      '.sign-out',
-      '[class*="logout"]',
-      'a[href*="/action/user/logout"]',
-    ];
-    
-    for (const selector of logoutSelectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        log('oschina', '检测到退出按钮，已登录: ' + selector);
-        return {
-          loggedIn: true,
-          platform: 'oschina',
-          nickname: '开源中国用户',
-        };
-      }
-    }
-    
-    // 方法6: 检查是否在个人中心
-    if (url.includes('/my') || url.includes('/u/') || url.includes('/home/')) {
-      // 检查页面是否有用户信息
-      const pageUserEl = document.querySelector('.user-info, .profile-info, .user-center');
-      if (pageUserEl) {
-        log('oschina', '在个人中心，已登录');
-        return {
-          loggedIn: true,
-          platform: 'oschina',
-          nickname: '开源中国用户',
-        };
-      }
-    }
-    
-    // 方法7: 调用开源中国 API
-    try {
-      log('oschina', '尝试调用 API...');
-      const res = await fetch('https://www.oschina.net/action/user/info', {
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-      
-      if (res.ok) {
-        const data = await res.json();
-        log('oschina', 'API 响应: ' + JSON.stringify(data).substring(0, 200));
-        
-        if (data.code === 0 || data.result?.id || data.user?.id || data.id) {
-          const user = data.result || data.user || data;
-          return {
-            loggedIn: true,
-            platform: 'oschina',
-            userId: String(user.id),
-            nickname: user.name || user.nickname || '开源中国用户',
-            avatar: user.portrait || user.avatar,
-          };
-        }
-      }
-    } catch (e: any) {
-      log('oschina', 'API 调用失败: ' + e.message);
-    }
-    
-    // 方法8: 检查登录按钮（如果有明显的登录按钮，则未登录）
-    const loginBtnSelectors = [
-      '.login-btn',
-      'a[href*="login"]',
-      '.sign-in',
-      '[class*="login"]',
-      '.header-login-btn',
-    ];
-    
-    for (const selector of loginBtnSelectors) {
-      const el = document.querySelector(selector);
-      if (el && (el.textContent?.includes('登录') || el.textContent?.includes('Login'))) {
-        log('oschina', '检测到登录按钮，未登录: ' + selector);
-        return { loggedIn: false, platform: 'oschina' };
-      }
-    }
-    
-    log('oschina', '未能确定登录状态，默认未登录');
     return { loggedIn: false, platform: 'oschina' };
   },
 };
-
 
 // ============================================================
 // 检测器注册表
@@ -1890,12 +1042,11 @@ export async function detectLoginState(): Promise<LoginState> {
 
 /**
  * 启动登录状态轮询
- * 用于引导登录场景：持续检测直到登录成功
  */
 export function startLoginPolling(
   onLoginSuccess: (state: LoginState) => void,
-  interval = 1000,
-  maxAttempts = 180 // 3分钟
+  interval = 2000,
+  maxAttempts = 90 // 3分钟
 ): () => void {
   let attempts = 0;
   let stopped = false;
@@ -1923,10 +1074,8 @@ export function startLoginPolling(
     }
   };
   
-  // 立即开始第一次检测
   poll();
   
-  // 返回停止函数
   return () => {
     stopped = true;
     log('polling', '轮询已停止');
@@ -1939,46 +1088,25 @@ export function startLoginPolling(
 export function initAuthDetector() {
   log('init', '初始化登录检测器');
   
-  // 监听来自 background 的消息
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'CHECK_LOGIN') {
       log('message', '收到登录检测请求');
       detectLoginState().then(sendResponse);
-      return true; // 异步响应
+      return true;
     }
     
     if (message.type === 'START_LOGIN_POLLING') {
       log('message', '收到启动轮询请求');
       startLoginPolling((state) => {
-        // 登录成功，通知 background
         chrome.runtime.sendMessage({
           type: 'LOGIN_SUCCESS',
           data: state,
         });
       });
       sendResponse({ started: true });
-      return false;
+      return true;
     }
+    
+    return false;
   });
-  
-  // 页面加载完成后，自动检测一次并报告
-  if (document.readyState === 'complete') {
-    reportLoginState();
-  } else {
-    window.addEventListener('load', reportLoginState);
-  }
-}
-
-/**
- * 主动报告当前登录状态给 background
- */
-async function reportLoginState() {
-  const state = await detectLoginState();
-  if (state.platform) {
-    log('report', '报告登录状态', state);
-    chrome.runtime.sendMessage({
-      type: 'LOGIN_STATE_REPORT',
-      data: state,
-    });
-  }
 }

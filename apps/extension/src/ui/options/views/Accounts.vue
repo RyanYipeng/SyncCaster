@@ -18,28 +18,88 @@
       <n-list v-else>
         <n-list-item v-for="account in accounts" :key="account.id">
           <template #prefix>
-            <n-avatar :src="account.avatar" :fallback-src="`https://api.dicebear.com/7.x/avataaars/svg?seed=${account.nickname}`" />
+            <!-- 7.2: Add warning badge on avatar for expired accounts -->
+            <n-badge :show="account.status === 'expired'" dot type="error" :offset="[-2, 2]">
+              <n-avatar :src="account.avatar" :fallback-src="`https://api.dicebear.com/7.x/avataaars/svg?seed=${account.nickname}`" />
+            </n-badge>
           </template>
-          <n-thing :title="account.nickname">
+          <n-thing>
+            <template #header>
+              <span 
+                class="cursor-pointer hover:text-blue-500 hover:underline transition-colors"
+                @click="goToUserProfile(account)"
+                :title="`点击访问 ${account.nickname} 的主页`"
+              >
+                {{ account.nickname }}
+              </span>
+            </template>
             <template #description>
               <n-space>
-                <n-tag type="info" size="small">{{ getPlatformName(account.platform) }}</n-tag>
+                <n-tag 
+                  type="info" 
+                  size="small" 
+                  class="cursor-pointer hover:opacity-80"
+                  @click="goToUserProfile(account)"
+                  :title="`点击访问 ${getPlatformName(account.platform)}`"
+                >
+                  {{ getPlatformName(account.platform) }}
+                </n-tag>
                 <n-tag v-if="account.meta?.level" type="success" size="small">
                   Lv{{ account.meta.level }}
                 </n-tag>
+                <!-- 7.1: Status tag display logic -->
+                <n-tooltip v-if="account.status === 'expired'" trigger="hover">
+                  <template #trigger>
+                    <n-tag type="error" size="small">已失效</n-tag>
+                  </template>
+                  {{ account.lastError || '账号登录已失效，请重新登录' }}
+                </n-tooltip>
+                <n-tooltip v-else-if="account.status === 'error'" trigger="hover">
+                  <template #trigger>
+                    <n-tag type="warning" size="small">检测异常</n-tag>
+                  </template>
+                  {{ account.lastError || '检测异常，可能是临时问题' }}
+                </n-tooltip>
+                <n-spin v-else-if="account.status === 'checking'" :size="12" />
               </n-space>
             </template>
-            <template v-if="account.meta" #footer>
-              <n-space size="small" class="text-xs text-gray-500">
-                <span v-if="account.meta.followersCount">粉丝: {{ formatCount(account.meta.followersCount) }}</span>
-                <span v-if="account.meta.articlesCount">文章: {{ formatCount(account.meta.articlesCount) }}</span>
-                <span v-if="account.meta.viewsCount">阅读: {{ formatCount(account.meta.viewsCount) }}</span>
+            <template #footer>
+              <n-space vertical size="small">
+                <!-- Account meta info -->
+                <n-space v-if="account.meta" size="small" class="text-xs text-gray-500">
+                  <span v-if="account.meta.followersCount">粉丝: {{ formatCount(account.meta.followersCount) }}</span>
+                  <span v-if="account.meta.articlesCount">文章: {{ formatCount(account.meta.articlesCount) }}</span>
+                  <span v-if="account.meta.viewsCount">阅读: {{ formatCount(account.meta.viewsCount) }}</span>
+                </n-space>
+                <!-- 7.5: Display lastError in account footer -->
+                <div 
+                  v-if="account.lastError && (account.status === 'expired' || account.status === 'error')" 
+                  class="text-xs"
+                  :class="account.status === 'expired' ? 'text-red-500' : 'text-yellow-600'"
+                >
+                  {{ account.lastError }}
+                </div>
               </n-space>
             </template>
           </n-thing>
           <template #suffix>
             <n-space>
-              <n-button text type="primary" @click="refreshAccount(account)">
+              <!-- 7.3: Conditional re-login button -->
+              <n-button 
+                v-if="account.status === 'expired'" 
+                text 
+                type="warning" 
+                :loading="reloginLoadingMap[account.id]"
+                @click="reloginAccount(account)"
+              >
+                重新登录
+              </n-button>
+              <n-button 
+                v-else 
+                text 
+                type="primary" 
+                @click="refreshAccount(account)"
+              >
                 刷新
               </n-button>
               <n-switch v-model:value="account.enabled" @update:value="toggleAccount(account)" />
@@ -96,8 +156,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
-import { db, type Account } from '@synccaster/core';
+import { ref, reactive, onMounted, watch } from 'vue';
+import { db, type Account, AccountStatus } from '@synccaster/core';
 import { useMessage } from 'naive-ui';
 
 defineProps<{ isDark?: boolean }>();
@@ -107,6 +167,8 @@ const showAddDialog = ref(false);
 const selectedPlatform = ref<string>('');
 const addingAccount = ref(false);
 const refreshingAll = ref(false);
+// 7.4: Track re-login loading state per account
+const reloginLoadingMap = reactive<Record<string, boolean>>({});
 
 // 监听对话框打开，重置状态
 watch(showAddDialog, (newVal) => {
@@ -136,6 +198,27 @@ const platforms = [
   { id: 'bilibili', name: 'B站专栏', icon: '📺' },
   { id: 'oschina', name: '开源中国', icon: '🔴' },
 ];
+
+// 平台用户主页 URL 模板
+// 注意：各平台的 URL 格式不同，需要根据实际情况配置
+const platformUserUrls: Record<string, (userId?: string) => string> = {
+  'juejin': (userId) => userId ? `https://juejin.cn/user/${userId}` : 'https://juejin.cn/user/settings/profile',
+  'csdn': (userId) => userId ? `https://blog.csdn.net/${userId}` : 'https://i.csdn.net/#/user-center/profile',
+  'zhihu': (userId) => userId ? `https://www.zhihu.com/people/${userId}` : 'https://www.zhihu.com/settings/profile',
+  'wechat': () => 'https://mp.weixin.qq.com/',
+  // 简书使用 slug 格式的 userId，如 bb8f42a96b80
+  'jianshu': (userId) => userId ? `https://www.jianshu.com/u/${userId}` : 'https://www.jianshu.com/settings/basic',
+  // 博客园使用 blogApp 作为主页路径，格式为 https://home.cnblogs.com/u/{blogApp}
+  'cnblogs': (userId) => userId ? `https://home.cnblogs.com/u/${userId}` : 'https://account.cnblogs.com/settings/account',
+  // 51CTO 使用纯数字 userId，格式为 https://blog.51cto.com/u_{userId}
+  '51cto': (userId) => userId ? `https://blog.51cto.com/u_${userId}` : 'https://home.51cto.com/space',
+  'tencent-cloud': (userId) => userId ? `https://cloud.tencent.com/developer/user/${userId}` : 'https://cloud.tencent.com/developer/user',
+  // 阿里云开发者社区主页格式为 https://developer.aliyun.com/profile/{userId}
+  'aliyun': (userId) => userId ? `https://developer.aliyun.com/profile/${userId}` : 'https://developer.aliyun.com/my',
+  'segmentfault': (userId) => userId ? `https://segmentfault.com/u/${userId}` : 'https://segmentfault.com/user/settings',
+  'bilibili': (userId) => userId ? `https://space.bilibili.com/${userId}` : 'https://member.bilibili.com/platform/home',
+  'oschina': (userId) => userId ? `https://my.oschina.net/u/${userId}` : 'https://my.oschina.net/',
+};
 
 onMounted(async () => {
   await loadAccounts();
@@ -176,6 +259,33 @@ function formatCount(count: number): string {
     return (count / 1000).toFixed(1) + 'k';
   }
   return count.toString();
+}
+
+/**
+ * 跳转到平台用户主页
+ * 
+ * 从账号 ID 中提取真实的 userId（格式为 platform-userId）
+ * 如果账号有 profileUrl 字段，优先使用
+ */
+function goToUserProfile(account: Account) {
+  // 优先使用账号存储的 profileUrl（如果有）
+  if ((account as any).profileUrl) {
+    window.open((account as any).profileUrl, '_blank');
+    return;
+  }
+  
+  const urlFn = platformUserUrls[account.platform];
+  if (urlFn) {
+    // 从 account.id 中提取 userId（格式为 platform-userId）
+    // 例如：cnblogs-RyanYipeng -> RyanYipeng
+    //       jianshu-bb8f42a96b80 -> bb8f42a96b80
+    //       51cto-17035626 -> 17035626
+    const idParts = account.id.split('-');
+    // 第一部分是平台名，剩余部分是 userId（userId 本身可能包含 -）
+    const userId = idParts.length > 1 ? idParts.slice(1).join('-') : undefined;
+    const url = urlFn(userId);
+    window.open(url, '_blank');
+  }
 }
 
 async function toggleAccount(account: Account) {
@@ -281,6 +391,8 @@ async function refreshAccount(account: Account) {
       await loadAccounts();
     } else {
       message.error(result.error || '刷新失败');
+      // 7.6: Reload accounts to show updated status
+      await loadAccounts();
     }
   } catch (error: any) {
     loadingMsg.destroy();
@@ -289,6 +401,56 @@ async function refreshAccount(account: Account) {
   }
 }
 
+/**
+ * 7.4: Re-login account
+ * 
+ * Send RELOGIN_ACCOUNT message to background, show loading message during login,
+ * and handle success/failure responses.
+ * 
+ * Requirements: 4.2, 4.4, 4.5
+ */
+async function reloginAccount(account: Account) {
+  const platformName = getPlatformName(account.platform);
+  
+  // Set loading state for this account
+  reloginLoadingMap[account.id] = true;
+  const loadingMsg = message.loading(`正在打开 ${platformName} 登录页面，请完成登录...`, { duration: 0 });
+  
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'RELOGIN_ACCOUNT',
+      data: { account },
+    });
+
+    loadingMsg.destroy();
+
+    if (result.success) {
+      // 4.4: Show success message when login is detected successfully
+      message.success(`${platformName} 重新登录成功！`);
+      await loadAccounts();
+    } else {
+      // 4.5: Show message indicating login was not completed
+      message.warning(result.error || '登录未完成，请重试');
+    }
+  } catch (error: any) {
+    loadingMsg.destroy();
+    console.error('Failed to re-login account:', error);
+    // 4.5: Show message indicating login was not completed
+    message.error('重新登录失败: ' + (error.message || '未知错误'));
+  } finally {
+    // Clear loading state
+    reloginLoadingMap[account.id] = false;
+  }
+}
+
+/**
+ * 7.6: Refresh all accounts with enhanced status handling
+ * 
+ * Update local accounts array with returned status and improve error message
+ * display based on errorType.
+ * 
+ * Requirements: 2.2, 2.3
+ */
 async function refreshAllAccounts() {
   if (accounts.value.length === 0) {
     message.warning('暂无账号需要刷新');
@@ -296,37 +458,64 @@ async function refreshAllAccounts() {
   }
   
   refreshingAll.value = true;
-  const loadingMsg = message.loading(`正在刷新 ${accounts.value.length} 个账号...`, { duration: 0 });
-  
-  let successCount = 0;
-  let failCount = 0;
+  const loadingMsg = message.loading(`正在快速刷新 ${accounts.value.length} 个账号...`, { duration: 0 });
   
   try {
-    for (const account of accounts.value) {
-      try {
-        const result = await chrome.runtime.sendMessage({
-          type: 'REFRESH_ACCOUNT',
-          data: { account },
-        });
-        if (result.success) {
-          successCount++;
-        } else {
-          failCount++;
-        }
-      } catch (e) {
-        failCount++;
-      }
-    }
+    // 使用新的快速批量刷新 API（并行，无需打开标签页）
+    const result = await chrome.runtime.sendMessage({
+      type: 'REFRESH_ALL_ACCOUNTS_FAST',
+      data: { accounts: accounts.value },
+    });
     
     loadingMsg.destroy();
     
-    if (failCount === 0) {
-      message.success(`全部 ${successCount} 个账号刷新成功`);
+    if (result.success) {
+      const { successCount, failedCount, failedAccounts } = result;
+      
+      if (failedCount === 0) {
+        message.success(`全部 ${successCount} 个账号刷新成功`);
+      } else if (successCount === 0) {
+        message.error(`全部 ${failedCount} 个账号刷新失败`);
+      } else {
+        message.warning(`刷新完成：${successCount} 成功，${failedCount} 失败`);
+      }
+      
+      // 7.6: Distinguish between truly expired and temporary errors based on status
+      if (failedAccounts && failedAccounts.length > 0) {
+        // 真正失效的账号（status 为 expired）
+        const reallyExpired = failedAccounts.filter((f: any) => 
+          f.account.status === AccountStatus.EXPIRED || 
+          f.errorType === 'logged_out' || 
+          f.retryable === false
+        );
+        // 临时错误（status 为 error，可重试）
+        const maybeTemporary = failedAccounts.filter((f: any) => 
+          f.account.status === AccountStatus.ERROR ||
+          (f.retryable === true && f.errorType !== 'logged_out')
+        );
+        
+        // 2.2: Show different visual indicators for expired vs temporarily failed
+        if (reallyExpired.length > 0) {
+          const expiredNames = reallyExpired.map((f: any) => 
+            getPlatformName(f.account.platform)
+          ).join('、');
+          message.error(`以下账号登录已失效，请点击"重新登录"：${expiredNames}`, { duration: 6000 });
+        }
+        
+        // 2.3: Show message suggesting retry later for temporary errors
+        if (maybeTemporary.length > 0) {
+          const tempNames = maybeTemporary.map((f: any) => 
+            `${getPlatformName(f.account.platform)}(${f.error || '检测异常'})`
+          ).join('、');
+          message.warning(`以下账号检测异常（可能是临时问题，稍后重试即可）：${tempNames}`, { duration: 5000 });
+        }
+      }
+      
+      // 7.6: Reload accounts to display updated status fields
+      await loadAccounts();
     } else {
-      message.warning(`刷新完成：${successCount} 成功，${failCount} 失败`);
+      message.error(result.error || '刷新失败');
     }
-    
-    await loadAccounts();
   } catch (error: any) {
     loadingMsg.destroy();
     console.error('Failed to refresh all accounts:', error);

@@ -228,8 +228,7 @@ async function getHljsStyles(): Promise<string> {
     const cssText = await response.text()
     return `<style>${cssText}</style>`
   }
-  catch (error) {
-    console.warn(`Failed to fetch highlight.js styles:`, error)
+  catch {
     return ``
   }
 }
@@ -238,7 +237,6 @@ function getThemeStyles(): string {
   const themeStyle = document.querySelector(`#md-theme`) as HTMLStyleElement
 
   if (!themeStyle || !themeStyle.textContent) {
-    console.warn('[getThemeStyles] 未找到主题样式')
     return ``
   }
 
@@ -318,8 +316,8 @@ function getKatexStyles(): string {
         cssText += rules[i].cssText + '\n'
       }
       return `<style>${cssText}</style>`
-    } catch (e) {
-      console.warn('[getKatexStyles] Failed to extract KaTeX styles:', e)
+    } catch {
+      // Silently ignore extraction errors
     }
   }
 

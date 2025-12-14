@@ -290,6 +290,36 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
         return { success: false, error: error.message };
       }
 
+    case 'REFRESH_ALL_ACCOUNTS_FAST':
+      // 批量快速刷新所有账号（并行，无需打开标签页）
+      logger.info('account', 'Fast refreshing all accounts', { count: message.data?.accounts?.length });
+      try {
+        const result = await AccountService.refreshAllAccountsFast(message.data.accounts);
+        return { 
+          success: true, 
+          successCount: result.success.length,
+          failedCount: result.failed.length,
+          successAccounts: result.success,
+          failedAccounts: result.failed,
+        };
+      } catch (error: any) {
+        logger.error('account', 'Failed to refresh all accounts', { error });
+        return { success: false, error: error.message };
+      }
+
+    case 'RELOGIN_ACCOUNT':
+      // 重新登录账号（打开登录页面，轮询检测登录成功）
+      // Requirements: 4.2
+      logger.info('account', 'Re-login account', { platform: message.data?.account?.platform });
+      try {
+        const account = await AccountService.reloginAccount(message.data.account);
+        logger.info('account', 'Re-login successful', { account });
+        return { success: true, account };
+      } catch (error: any) {
+        logger.error('account', 'Failed to re-login account', { error });
+        return { success: false, error: error.message };
+      }
+
     case 'CONTENT_COLLECTED':
       // 内容采集完成的通知
       logger.info('collect', 'Content collected successfully', message.data);

@@ -61,8 +61,6 @@ function initLocalMathJax(): void {
     InputJax: tex,
     OutputJax: svg,
   })
-
-  console.log('[MathJax] Local mathjax-full initialized')
 }
 
 /**
@@ -129,8 +127,7 @@ export function renderMathWithLocalMathJax(tex: string, displayMode: boolean): s
     }
     
     return svg
-  } catch (error) {
-    console.warn('[MathJax] Rendering error:', error)
+  } catch {
     const escapedText = tex
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -162,8 +159,8 @@ export function renderPendingMathWithKaTeX(container: Document | Element = docum
       element.innerHTML = rendered
       element.classList.remove('math-pending')
       element.removeAttribute('data-math-tex')
-    } catch (error) {
-      console.warn('[MathJax] Failed to render:', tex, error)
+    } catch {
+      // Silently fail for individual math elements
     }
   })
 }
