@@ -8,6 +8,7 @@ import { publishToTarget } from './publish-engine';
 import { Logger } from '@synccaster/utils';
 import { startZhihuLearn, fetchZhihuLearnedTemplate } from './learn-recorder';
 import { AccountService } from './account-service';
+import { fetchPlatformUserInfo } from './platform-api';
 
 const logger = new Logger('background');
 
@@ -243,6 +244,20 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
         return result;
       } catch (error: any) {
         logger.error('save', 'Save failed', { error });
+        return { success: false, error: error.message };
+      }
+
+    case 'FETCH_PLATFORM_USER_INFO':
+      // 供 content script 查询登录态（部分平台需要避免页面侧 API 调用）
+      try {
+        const platform = message.data?.platform;
+        if (!platform || typeof platform !== 'string') {
+          return { success: false, error: 'Invalid platform' };
+        }
+        const info = await fetchPlatformUserInfo(platform);
+        return { success: true, info };
+      } catch (error: any) {
+        logger.error('account', 'Failed to fetch platform user info', { error });
         return { success: false, error: error.message };
       }
 

@@ -235,6 +235,24 @@ describe('Fallback Decision Logic', () => {
       { numRuns: 100 }
     );
   });
+
+  it('shouldFallbackToCookie returns false when primary already uses cookie/html detection', () => {
+    fc.assert(
+      fc.property(platformIdArb, fc.constantFrom<'cookie' | 'html'>('cookie', 'html'), (platform, method) => {
+        const userInfo: UserInfo = {
+          loggedIn: false,
+          platform,
+          errorType: AuthErrorType.API_ERROR,
+          error: '临时错误',
+          retryable: true,
+          detectionMethod: method,
+        };
+
+        expect(shouldFallbackToCookie(userInfo)).toBe(false);
+      }),
+      { numRuns: 100 }
+    );
+  });
 });
 
 describe('Fallback Execution', () => {

@@ -201,20 +201,53 @@ const platforms = [
 
 // 平台用户主页 URL 模板
 // 注意：各平台的 URL 格式不同，需要根据实际情况配置
+// 当 userId 无效时，返回设置页面或平台首页
 const platformUserUrls: Record<string, (userId?: string) => string> = {
   'juejin': (userId) => userId ? `https://juejin.cn/user/${userId}` : 'https://juejin.cn/user/settings/profile',
   'csdn': (userId) => userId ? `https://blog.csdn.net/${userId}` : 'https://i.csdn.net/#/user-center/profile',
   'zhihu': (userId) => userId ? `https://www.zhihu.com/people/${userId}` : 'https://www.zhihu.com/settings/profile',
   'wechat': () => 'https://mp.weixin.qq.com/',
-  // 简书使用 slug 格式的 userId，如 bb8f42a96b80
-  'jianshu': (userId) => userId ? `https://www.jianshu.com/u/${userId}` : 'https://www.jianshu.com/settings/basic',
+  // 简书使用 slug 格式的 userId，如 bb8f42a96b80（不是数字 ID）
+  'jianshu': (userId) => {
+    // 检查 userId 是否是有效的 slug（字母数字组合，不是纯数字开头的临时 ID）
+    if (userId && !userId.startsWith('jianshu_') && userId.length > 5) {
+      return `https://www.jianshu.com/u/${userId}`;
+    }
+    return 'https://www.jianshu.com/settings/basic';
+  },
   // 博客园使用 blogApp 作为主页路径，格式为 https://home.cnblogs.com/u/{blogApp}
-  'cnblogs': (userId) => userId ? `https://home.cnblogs.com/u/${userId}` : 'https://account.cnblogs.com/settings/account',
-  // 51CTO 使用纯数字 userId，格式为 https://blog.51cto.com/u_{userId}
-  '51cto': (userId) => userId ? `https://blog.51cto.com/u_${userId}` : 'https://home.51cto.com/space',
-  'tencent-cloud': (userId) => userId ? `https://cloud.tencent.com/developer/user/${userId}` : 'https://cloud.tencent.com/developer/user',
+  'cnblogs': (userId) => {
+    // blogApp 通常是字母数字组合，不是纯数字或时间戳格式
+    // 过滤掉临时生成的 ID（如 cnblogs_1765715946013）
+    if (userId && userId.length > 2 && !userId.startsWith('cnblogs_') && !/^\d{10,}$/.test(userId)) {
+      return `https://home.cnblogs.com/u/${userId}`;
+    }
+    return 'https://account.cnblogs.com/settings/account';
+  },
+  // 51CTO 使用纯数字 uid，个人主页格式为 https://home.51cto.com/space?uid={uid}
+  '51cto': (userId) => {
+    // 51CTO 的 uid 应该是纯数字
+    if (userId && /^\d+$/.test(userId)) {
+      return `https://home.51cto.com/space?uid=${userId}`;
+    }
+    return 'https://home.51cto.com/space';
+  },
+  // 腾讯云开发者社区主页格式为 https://cloud.tencent.com/developer/user/{userId}
+  'tencent-cloud': (userId) => {
+    // userId 应该是纯数字
+    if (userId && /^\d+$/.test(userId)) {
+      return `https://cloud.tencent.com/developer/user/${userId}`;
+    }
+    return 'https://cloud.tencent.com/developer/user';
+  },
   // 阿里云开发者社区主页格式为 https://developer.aliyun.com/profile/{userId}
-  'aliyun': (userId) => userId ? `https://developer.aliyun.com/profile/${userId}` : 'https://developer.aliyun.com/my',
+  'aliyun': (userId) => {
+    // userId 应该是纯数字
+    if (userId && /^\d+$/.test(userId)) {
+      return `https://developer.aliyun.com/profile/${userId}`;
+    }
+    return 'https://developer.aliyun.com/my';
+  },
   'segmentfault': (userId) => userId ? `https://segmentfault.com/u/${userId}` : 'https://segmentfault.com/user/settings',
   'bilibili': (userId) => userId ? `https://space.bilibili.com/${userId}` : 'https://member.bilibili.com/platform/home',
   'oschina': (userId) => userId ? `https://my.oschina.net/u/${userId}` : 'https://my.oschina.net/',
@@ -264,7 +297,7 @@ function formatCount(count: number): string {
 /**
  * 跳转到平台用户主页
  * 
- * 从账号 ID 中提取真实的 userId（格式为 platform-userId）
+ * 从账号 ID 中提取真实的 userId（格式为 platform_userId 或 platform-userId）
  * 如果账号有 profileUrl 字段，优先使用
  */
 function goToUserProfile(account: Account) {
@@ -276,13 +309,66 @@ function goToUserProfile(account: Account) {
   
   const urlFn = platformUserUrls[account.platform];
   if (urlFn) {
-    // 从 account.id 中提取 userId（格式为 platform-userId）
-    // 例如：cnblogs-RyanYipeng -> RyanYipeng
-    //       jianshu-bb8f42a96b80 -> bb8f42a96b80
-    //       51cto-17035626 -> 17035626
-    const idParts = account.id.split('-');
-    // 第一部分是平台名，剩余部分是 userId（userId 本身可能包含 -）
-    const userId = idParts.length > 1 ? idParts.slice(1).join('-') : undefined;
+    // 从 account.id 中提取 userId
+    // 账号 ID 格式可能是：
+    // - platform_userId（下划线分隔，如 jianshu_bb8f42a96b80）
+    // - platform-userId（连字符分隔，如 cnblogs-RyanYipeng）
+    let userId: string | undefined;
+    
+    // 先尝试下划线分隔（新格式）
+    const underscoreIndex = account.id.indexOf('_');
+    if (underscoreIndex > 0) {
+      const prefix = account.id.substring(0, underscoreIndex);
+      // 确保前缀是平台名
+      if (prefix === account.platform || prefix.replace('-', '') === account.platform.replace('-', '')) {
+        userId = account.id.substring(underscoreIndex + 1);
+      }
+    }
+    
+    // 如果下划线分隔没找到，尝试连字符分隔（旧格式）
+    if (!userId) {
+      const idParts = account.id.split('-');
+      // 第一部分是平台名，剩余部分是 userId（userId 本身可能包含 -）
+      if (idParts.length > 1) {
+        // 特殊处理：tencent-cloud 平台名本身包含连字符
+        if (account.platform === 'tencent-cloud' && idParts.length > 2) {
+          userId = idParts.slice(2).join('-');
+        } else {
+          userId = idParts.slice(1).join('-');
+        }
+      }
+    }
+    
+    // 过滤掉无效的 userId（如 undefined, 空字符串, 或临时生成的 ID）
+    // 临时 ID 格式为 platform_timestamp（如 jianshu_1765638738736, cnblogs_1765715946013）
+    if (userId === 'undefined' || userId === '' || 
+        userId?.startsWith('jianshu_') || 
+        userId?.startsWith('cnblogs_') ||
+        userId?.startsWith('csdn_') ||
+        /^\d{10,}$/.test(userId || '')) {
+      userId = undefined;
+    }
+
+    // 兜底：使用刷新时写入的 profileId（避免因账号 id 不是平台 userId 导致跳转错误）
+    if (!userId) {
+      const profileId = (account.meta as any)?.profileId;
+      if (typeof profileId === 'string' && profileId.trim()) {
+        const trimmed = profileId.trim();
+        // 简书 profileId 必须是 slug（非纯数字），避免历史脏数据导致跳转到错误页面
+        if (!(account.platform === 'jianshu' && /^\d+$/.test(trimmed))) {
+          userId = trimmed;
+        }
+      }
+    }
+
+    // 博客园兜底：部分场景无法获取 blogApp 时，尝试用昵称（若符合 blogApp 规范）
+    if (!userId && account.platform === 'cnblogs') {
+      const nickname = account.nickname?.trim();
+      if (nickname && /^[a-zA-Z0-9][a-zA-Z0-9_-]{2,}$/.test(nickname)) {
+        userId = nickname;
+      }
+    }
+    
     const url = urlFn(userId);
     window.open(url, '_blank');
   }

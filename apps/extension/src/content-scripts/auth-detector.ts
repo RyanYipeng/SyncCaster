@@ -35,6 +35,80 @@ function log(scope: string, msg: string, data?: any) {
   console.log(`[auth-detector:${scope}] ${msg}`, data ?? '');
 }
 
+async function fetchPlatformInfoFromBackground(platform: string): Promise<LoginState | null> {
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      type: 'FETCH_PLATFORM_USER_INFO',
+      data: { platform },
+    });
+    const info = resp?.info;
+    if (resp?.success && info?.loggedIn) {
+      return {
+        loggedIn: true,
+        platform,
+        userId: info.userId,
+        nickname: info.nickname,
+        avatar: info.avatar,
+        meta: info.meta,
+      };
+    }
+  } catch (e) {
+    log(platform, '后台检测失败', e);
+  }
+  return null;
+}
+
+function readTextFromEl(el: Element | null | undefined): string | undefined {
+  if (!el) return undefined;
+  const text = el.textContent?.trim();
+  if (text) return text;
+  const title = (el as HTMLElement).getAttribute?.('title')?.trim();
+  return title || undefined;
+}
+
+function extractCssUrl(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const match = value.match(/url\((['"]?)(.*?)\1\)/i);
+  return match?.[2] || undefined;
+}
+
+function readAvatarUrlFromEl(el: Element | null | undefined): string | undefined {
+  if (!el) return undefined;
+  if (el instanceof HTMLImageElement && el.src) return el.src;
+  const img = el.querySelector('img') as HTMLImageElement | null;
+  if (img?.src) return img.src;
+  const styleBg = extractCssUrl((el as HTMLElement).style?.backgroundImage);
+  if (styleBg) return styleBg;
+  try {
+    const computed = extractCssUrl(getComputedStyle(el as HTMLElement).backgroundImage);
+    if (computed) return computed;
+  } catch {}
+  return undefined;
+}
+
+async function waitForValue<T>(
+  getter: () => T | null | undefined,
+  options: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<T | undefined> {
+  const timeoutMs = options.timeoutMs ?? 1800;
+  const intervalMs = options.intervalMs ?? 120;
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    const value = getter();
+    if (value !== undefined && value !== null) {
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) return trimmed as T;
+      } else {
+        return value;
+      }
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return undefined;
+}
+
 // ============================================================
 // 掘金检测器 - API 优先
 // ============================================================
@@ -86,11 +160,87 @@ const juejinDetector: PlatformAuthDetector = {
 // ============================================================
 // CSDN 检测器 - API 优先
 // ============================================================
-const csdnDetector: PlatformAuthDetector = {
-  id: 'csdn',
-  urlPatterns: [/csdn\.net/],
-  async checkLogin(): Promise<LoginState> {
-    log('csdn', '检测登录状态...');
+ const csdnDetector: PlatformAuthDetector = {
+   id: 'csdn',
+   urlPatterns: [/csdn\.net/],
+   async checkLogin(): Promise<LoginState> {
+     log('csdn', '检测登录状态...');
+
+     const getUserNameFromCookie = () => {
+       try {
+         const cookies = document.cookie;
+         const match = cookies.match(/(?:^|;\s*)UserName=([^;]+)/);
+         if (!match?.[1]) return undefined;
+         const decoded = decodeURIComponent(match[1]);
+         return decoded?.trim() || undefined;
+       } catch {
+         return undefined;
+       }
+     };
+
+     // 优先：个人中心页面（SPA 渲染）直接从 DOM 提取昵称/头像
+     const url = window.location.href;
+     const isIHost = window.location.host === 'i.csdn.net';
+     const isUserCenterPage =
+       isIHost &&
+       (url.includes('user-center') || window.location.hash.includes('user-center') || url.includes('/#/user-center'));
+
+     const cleanNickname = (value?: string) => {
+       const trimmed = value?.trim();
+       if (!trimmed) return undefined;
+       // 过滤“已加入 CSDN X年”等非昵称信息
+       if (trimmed.includes('已加入') && trimmed.includes('CSDN')) return undefined;
+       return trimmed;
+     };
+
+     const extractNicknameFromContainer = (container: Element | null) => {
+       if (!container) return undefined;
+       const titleCandidate = container.querySelector('[title]') as HTMLElement | null;
+       const title = cleanNickname(titleCandidate?.getAttribute?.('title') || undefined);
+       if (title) return title;
+
+       const all = Array.from(container.querySelectorAll('a, span, div')) as HTMLElement[];
+       for (const el of all) {
+         const className = (el.className || '').toString();
+         if (className.includes('age') || className.includes('icon')) continue;
+         const text = cleanNickname(readTextFromEl(el));
+         if (!text) continue;
+         if (text.length > 40) continue;
+         return text;
+       }
+
+       const selfText = cleanNickname(readTextFromEl(container));
+       return selfText;
+     };
+
+     const getNicknameFromDom = () =>
+       extractNicknameFromContainer(document.querySelector('.user-profile-head-name')) ||
+       extractNicknameFromContainer(document.querySelector('[class*="user-profile"][class*="head-name"]')) ||
+       cleanNickname(readTextFromEl(document.querySelector('[class*="user-profile"][class*="name"]')));
+     const getAvatarFromDom = () =>
+       readAvatarUrlFromEl(document.querySelector('.user-profile-avatar img')) ||
+       readAvatarUrlFromEl(document.querySelector('.user-profile-avatar')) ||
+      readAvatarUrlFromEl(document.querySelector('img[src*="profile-avatar.csdnimg.cn"]')) ||
+       readAvatarUrlFromEl(document.querySelector('[class*="user-profile"][class*="avatar"]'));
+
+     // i.csdn.net 个人中心页经常是 hash 路由，且可能重定向到相近路径；只要 DOM 结构出现就视为“个人中心上下文”
+     const hasUserCenterDom = isIHost && !!document.querySelector('.user-profile-head-name, .user-profile-avatar');
+
+     if (isUserCenterPage || hasUserCenterDom) {
+       // 该页面未登录时通常会引导跳转/展示登录入口，昵称/头像元素不会出现
+       const nicknameFromDom = await waitForValue(() => getNicknameFromDom(), { timeoutMs: 10000 });
+       const avatarFromDom = await waitForValue(() => getAvatarFromDom(), { timeoutMs: 10000 });
+       if (nicknameFromDom || avatarFromDom) {
+         const cookieUser = getUserNameFromCookie();
+         const bg = await fetchPlatformInfoFromBackground('csdn');
+         return {
+           loggedIn: true,
+           platform: 'csdn',
+           nickname: nicknameFromDom || cookieUser || bg?.nickname || 'CSDN用户',
+           avatar: avatarFromDom || bg?.avatar,
+         };
+       }
+     }
     
     // 优先使用 API
     try {
@@ -101,15 +251,19 @@ const csdnDetector: PlatformAuthDetector = {
       
       if (res.ok) {
         const data = await res.json();
-        if (data.code === 200 && data.data) {
-          const user = data.data;
-          log('csdn', '从 API 获取到用户信息', { nickname: user.nickname });
+        const payload = data?.data || data?.result || data;
+        if ((data?.code === 200 || data?.code === '200') && payload) {
+          const user = payload;
+          const userId = user.username || user.userName || user.user_name;
+          const nickname = user.nickname || user.nickName || user.name || userId;
+          const avatar = user.avatar || user.avatarUrl || user.headUrl;
+          log('csdn', '从 API 获取到用户信息', { nickname });
           return {
             loggedIn: true,
             platform: 'csdn',
-            userId: user.username,
-            nickname: user.nickname || user.username,
-            avatar: user.avatar,
+            userId: userId,
+            nickname: nickname,
+            avatar: avatar,
             meta: {
               level: user.level,
               followersCount: user.fansNum,
@@ -131,28 +285,30 @@ const csdnDetector: PlatformAuthDetector = {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.code === 200 && data.data) {
-          const user = data.data;
+        const payload = data?.data || data?.result || data;
+        if ((data?.code === 200 || data?.code === '200') && payload) {
+          const user = payload;
           log('csdn', '从备用 API 获取到用户信息');
           return {
             loggedIn: true,
             platform: 'csdn',
-            userId: user.username,
-            nickname: user.nickName || user.username,
-            avatar: user.avatar,
+            userId: user.username || user.userName || user.user_name,
+            nickname: user.nickName || user.nickname || user.name || user.username,
+            avatar: user.avatar || user.avatarUrl || user.headUrl,
           };
         }
       }
     } catch {}
     
     // 检查 Cookie
+    let cookieState: LoginState | null = null;
     try {
       const cookies = document.cookie;
       const userNameMatch = cookies.match(/UserName=([^;]+)/);
       if (userNameMatch) {
         const userName = decodeURIComponent(userNameMatch[1]);
         log('csdn', '从 Cookie 检测到用户名: ' + userName);
-        return {
+        cookieState = {
           loggedIn: true,
           platform: 'csdn',
           userId: userName,
@@ -160,6 +316,28 @@ const csdnDetector: PlatformAuthDetector = {
         };
       }
     } catch {}
+
+    // DOM: 仅用于补齐昵称/头像（不要仅凭“主页可见信息”判断登录）
+    const shouldWaitForDom = cookieState?.loggedIn === true;
+    const nicknameFromDom = shouldWaitForDom ? await waitForValue(() => getNicknameFromDom()) : getNicknameFromDom();
+    const avatarFromDom = shouldWaitForDom ? await waitForValue(() => getAvatarFromDom(), { timeoutMs: 1500 }) : getAvatarFromDom();
+
+    // CSDN 子域名较多：content script 可能会遇到 CORS/HttpOnly 限制，兜底让 background 统一检测并补全昵称/头像
+    const bg = await fetchPlatformInfoFromBackground('csdn');
+    if (bg?.loggedIn) {
+      return {
+        ...bg,
+        nickname: nicknameFromDom || bg.nickname,
+        avatar: avatarFromDom || bg.avatar,
+      };
+    }
+    if (cookieState) {
+      return {
+        ...cookieState,
+        nickname: nicknameFromDom || cookieState.nickname,
+        avatar: avatarFromDom,
+      };
+    }
     
     return { loggedIn: false, platform: 'csdn' };
   },
@@ -228,13 +406,30 @@ const wechatDetector: PlatformAuthDetector = {
         return { loggedIn: false, platform: 'wechat' };
       }
     }
+
+    const getNicknameFromDom = () =>
+      readTextFromEl(document.querySelector('.weui-desktop-person-info .weui-desktop-name')) ||
+      readTextFromEl(document.querySelector('#js_mp_personal_info .weui-desktop-name')) ||
+      readTextFromEl(document.querySelector('.weui-desktop-name')) ||
+      readTextFromEl(document.querySelector('.weui-desktop-account__name')) ||
+      readTextFromEl(document.querySelector('.weui-desktop-account__nickname')) ||
+      readTextFromEl(document.querySelector('.weui-desktop-account__info .weui-desktop-account__name')) ||
+      readTextFromEl(document.querySelector('[class*="account"][class*="name"]'));
+    const getAvatarFromDom = () =>
+      readAvatarUrlFromEl(document.querySelector('img.weui-desktop-account__img')) ||
+      readAvatarUrlFromEl(document.querySelector('.weui-desktop-account__avatar img')) ||
+      readAvatarUrlFromEl(document.querySelector('[class*="avatar"] img')) ||
+      undefined;
     
     // 检查 URL 中的 token 参数
     const tokenMatch = url.match(/token=(\d+)/);
     if (tokenMatch && tokenMatch[1]) {
       log('wechat', '从 URL token 参数判断已登录');
+
+      const nicknameFromDom = await waitForValue(() => getNicknameFromDom());
+      const avatarFromDom = await waitForValue(() => getAvatarFromDom(), { timeoutMs: 1200 });
       
-      let nickname = '微信公众号';
+      let nickname = nicknameFromDom || '微信公众号';
       // 尝试从页面标题获取昵称
       const title = document.title;
       if (title && !title.includes('登录')) {
@@ -244,14 +439,11 @@ const wechatDetector: PlatformAuthDetector = {
         }
       }
       
-      // 尝试从 DOM 获取头像
-      const avatarEl = document.querySelector('.weui-desktop-account__avatar img, [class*="avatar"] img') as HTMLImageElement;
-      
       return {
         loggedIn: true,
         platform: 'wechat',
         nickname: nickname,
-        avatar: avatarEl?.src,
+        avatar: avatarFromDom,
       };
     }
     
@@ -259,10 +451,18 @@ const wechatDetector: PlatformAuthDetector = {
     try {
       const cookies = document.cookie;
       if (cookies.includes('slave_sid=') || cookies.includes('data_ticket=') || cookies.includes('bizuin=')) {
+        const nicknameFromDom = await waitForValue(() => getNicknameFromDom(), { timeoutMs: 1200 });
+        const avatarFromDom = await waitForValue(() => getAvatarFromDom(), { timeoutMs: 1200 });
+
+        // 兜底：让 background 尝试从 Cookie 结构化字段中解析昵称/头像
+        const bg = await fetchPlatformInfoFromBackground('wechat');
+        const bgNickname = bg?.loggedIn ? bg.nickname : undefined;
+        const bgAvatar = bg?.loggedIn ? bg.avatar : undefined;
         return {
           loggedIn: true,
           platform: 'wechat',
-          nickname: '微信公众号',
+          nickname: nicknameFromDom || bgNickname || '微信公众号',
+          avatar: avatarFromDom || bgAvatar,
         };
       }
     } catch {}
@@ -291,35 +491,42 @@ const jianshuDetector: PlatformAuthDetector = {
     log('jianshu', '检测登录状态...');
     
     // 尝试 API
-    try {
-      const res = await fetch('https://www.jianshu.com/shakespeare/v2/user/info', {
-        credentials: 'include',
-        headers: { 'Accept': 'application/json' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.id) {
-          // 简书的 userId 应该使用 slug 字段（用于主页 URL），而不是数字 id
-          // slug 格式如 bb8f42a96b80
-          const userId = data.slug || String(data.id);
-          log('jianshu', '从 API 获取到用户信息', { userId, nickname: data.nickname });
-          return {
-            loggedIn: true,
-            platform: 'jianshu',
-            userId: userId,
-            nickname: data.nickname,
-            avatar: data.avatar,
-            meta: {
-              followersCount: data.followers_count,
-              articlesCount: data.public_notes_count,
-              viewsCount: data.total_wordage,
-            },
-          };
+      try {
+        const res = await fetch('https://www.jianshu.com/shakespeare/v2/user/info', {
+          credentials: 'include',
+          headers: { 'Accept': 'application/json' },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const payload = data?.data || data?.result || data;
+          if (payload?.id) {
+            // 简书的 userId 应该使用 slug 字段（用于主页 URL），而不是数字 id
+            // slug 格式如 bb8f42a96b80
+            const slug =
+              (typeof payload.slug === 'string' && payload.slug.trim()) ||
+              (typeof payload.user?.slug === 'string' && payload.user.slug.trim()) ||
+              undefined;
+            const nickname = payload.nickname || payload.user?.nickname || payload.user?.name;
+            const avatar = payload.avatar || payload.user?.avatar;
+            const userId = slug;
+            log('jianshu', '从 API 获取到用户信息', { userId, slug, nickname });
+            return {
+              loggedIn: true,
+              platform: 'jianshu',
+              userId: userId,
+              nickname: nickname,
+              avatar: avatar,
+              meta: {
+                followersCount: payload.followers_count,
+                articlesCount: payload.public_notes_count,
+                viewsCount: payload.total_wordage,
+              },
+            };
+          }
         }
+      } catch (e) {
+        log('jianshu', 'API 调用失败', e);
       }
-    } catch (e) {
-      log('jianshu', 'API 调用失败', e);
-    }
     
     // 尝试从页面 URL 提取用户 slug（如果在用户主页）
     const url = window.location.href;
@@ -327,19 +534,36 @@ const jianshuDetector: PlatformAuthDetector = {
     if (slugMatch) {
       log('jianshu', '从 URL 提取到用户 slug', { slug: slugMatch[1] });
     }
-    
-    // DOM 检测
-    const avatarEl = document.querySelector('.user .avatar img, .avatar-wrapper img') as HTMLImageElement;
-    const usernameEl = document.querySelector('.user .name, .nickname');
-    
-    if (avatarEl?.src || usernameEl?.textContent?.trim()) {
+
+    // DOM: 仅用于补齐昵称/头像（不要仅凭“用户主页信息”判断登录）
+    const slugFromDom = (() => {
+      const avatarLink = document.querySelector('a.avatar[href^="/u/"]') as HTMLAnchorElement | null;
+      const nameLink = document.querySelector('a.name[href^="/u/"]') as HTMLAnchorElement | null;
+      const href = avatarLink?.getAttribute('href') || nameLink?.getAttribute('href');
+      const match = href?.match(/^\/u\/([a-zA-Z0-9]+)/);
+      return match?.[1];
+    })();
+    const nicknameFromDom =
+      readTextFromEl(document.querySelector('.main-top .title a.name')) ||
+      readTextFromEl(document.querySelector('.title a.name')) ||
+      readTextFromEl(document.querySelector('a.name[href^="/u/"]')) ||
+      readTextFromEl(document.querySelector('.user .name')) ||
+      readTextFromEl(document.querySelector('.nickname'));
+    const avatarFromDom =
+      readAvatarUrlFromEl(document.querySelector('.main-top a.avatar img')) ||
+      readAvatarUrlFromEl(document.querySelector('.main-top a.avatar')) ||
+      readAvatarUrlFromEl(document.querySelector('a.avatar[href^="/u/"] img')) ||
+      readAvatarUrlFromEl(document.querySelector('a.avatar[href^="/u/"]')) ||
+      readAvatarUrlFromEl(document.querySelector('.user .avatar img')) ||
+      readAvatarUrlFromEl(document.querySelector('.avatar-wrapper img'));
+
+    const bg = await fetchPlatformInfoFromBackground('jianshu');
+    if (bg?.loggedIn) {
       return {
-        loggedIn: true,
-        platform: 'jianshu',
-        // 如果从 URL 提取到了 slug，使用它
-        userId: slugMatch ? slugMatch[1] : undefined,
-        nickname: usernameEl?.textContent?.trim(),
-        avatar: avatarEl?.src,
+        ...bg,
+        userId: slugMatch?.[1] || slugFromDom || bg.userId,
+        nickname: nicknameFromDom || bg.nickname,
+        avatar: avatarFromDom || bg.avatar,
       };
     }
     
@@ -453,53 +677,90 @@ const cto51Detector: PlatformAuthDetector = {
   async checkLogin(): Promise<LoginState> {
     log('51cto', '检测登录状态...');
     
-    // 尝试 API
-    try {
-      const res = await fetch('https://home.51cto.com/api/user/info', {
-        credentials: 'include',
-        headers: { 'Accept': 'application/json' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if ((data.code === 0 || data.status === 'success') && data.data) {
-          const user = data.data;
-          // userId 应该是纯数字，用于构建主页 URL
-          const userId = String(user.id || user.uid || '');
-          log('51cto', '从 API 获取到用户信息', { userId, nickname: user.name || user.nickname });
-          return {
-            loggedIn: true,
-            platform: '51cto',
-            userId: userId,
-            nickname: user.name || user.nickname || '51CTO用户',
-            avatar: user.avatar || user.avatarUrl,
-          };
-        }
-      }
-    } catch (e) {
-      log('51cto', 'API 调用失败', e);
-    }
-    
-    // 尝试从页面 URL 提取用户 ID（如果在用户主页）
+    // ⚠️ 避免调用 home.51cto.com/api/user/info：该接口在未命中会话时可能下发清理 Cookie 的 Set-Cookie，
+    // 会导致“检测/刷新”触发实际登录态丢失。
+
+    // 尝试从页面 URL / DOM 提取用户 ID（如果在用户主页或用户中心）
     const url = window.location.href;
-    const userIdMatch = url.match(/blog\.51cto\.com\/u_(\d+)/);
-    if (userIdMatch) {
-      log('51cto', '从 URL 提取到用户 ID', { userId: userIdMatch[1] });
+    const domUid =
+      (document.querySelector('#homeBaseVar') as HTMLElement | null)?.getAttribute?.('user-id') ||
+      undefined;
+
+    // DOM: 头像/昵称（用户中心页常见结构）
+    const getNicknameFromDom = () =>
+      readTextFromEl(document.querySelector('.name a.left')) ||
+      readTextFromEl(document.querySelector('.name a')) ||
+      readTextFromEl(document.querySelector('[class*="name"] a.left')) ||
+      readTextFromEl(document.querySelector('[class*="user"] [class*="name"]'));
+    const getAvatarFromDom = () =>
+      readAvatarUrlFromEl(document.querySelector('img[src*="avatar.php"]')) ||
+      readAvatarUrlFromEl(document.querySelector('img[alt="头像"]')) ||
+      readAvatarUrlFromEl(document.querySelector('[class*="avatar"] img')) ||
+      undefined;
+    const shouldWaitForDom =
+      !!document.querySelector('#homeBaseVar') ||
+      !!document.querySelector('.name') ||
+      url.includes('home.51cto.com/space') ||
+      url.includes('blog.51cto.com/u_');
+    const nicknameFromDom = shouldWaitForDom ? await waitForValue(() => getNicknameFromDom(), { timeoutMs: 1200 }) : getNicknameFromDom();
+    const avatarFromDom = shouldWaitForDom ? await waitForValue(() => getAvatarFromDom(), { timeoutMs: 1200 }) : getAvatarFromDom();
+
+    // 主页：https://home.51cto.com/space?uid=17025626
+    const spaceUidMatch = url.match(/home\.51cto\.com\/space\?(?:[^#]*&)?uid=(\d+)/);
+    if (spaceUidMatch) {
+      log('51cto', '从 URL 提取到 uid', { userId: spaceUidMatch[1] });
       return {
         loggedIn: true,
         platform: '51cto',
-        userId: userIdMatch[1],
-        nickname: '51CTO用户',
+        userId: spaceUidMatch[1],
+        nickname: nicknameFromDom || '51CTO用户',
+        avatar: avatarFromDom,
+      };
+    }
+
+    // 旧格式：https://blog.51cto.com/u_17025626
+    const blogUidMatch = url.match(/blog\.51cto\.com\/u_(\d+)/);
+    if (blogUidMatch) {
+      log('51cto', '从 URL 提取到 uid', { userId: blogUidMatch[1] });
+      return {
+        loggedIn: true,
+        platform: '51cto',
+        userId: blogUidMatch[1],
+        nickname: nicknameFromDom || '51CTO用户',
+        avatar: avatarFromDom,
       };
     }
     
     // 检查退出按钮
-    const logoutEl = document.querySelector('a[href*="logout"], a[href*="signout"]');
+    const logoutEl = document.querySelector('a[href*="logout"], a[href*="signout"], a[href*="loginout"]');
     if (logoutEl) {
       return {
         loggedIn: true,
         platform: '51cto',
-        nickname: '51CTO用户',
+        userId: domUid || undefined,
+        nickname: nicknameFromDom || '51CTO用户',
+        avatar: avatarFromDom,
       };
+    }
+
+    // 兜底：让 background 用 Cookie 检测（不会触发页面请求）
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: 'FETCH_PLATFORM_USER_INFO',
+        data: { platform: '51cto' },
+      });
+      const info = resp?.info;
+      if (resp?.success && info?.loggedIn) {
+        return {
+          loggedIn: true,
+          platform: '51cto',
+          userId: info.userId || domUid || undefined,
+          nickname: nicknameFromDom || info.nickname || '51CTO用户',
+          avatar: avatarFromDom || info.avatar,
+        };
+      }
+    } catch (e) {
+      log('51cto', '后台检测失败', e);
     }
     
     return { loggedIn: false, platform: '51cto' };
@@ -535,16 +796,47 @@ const tencentCloudDetector: PlatformAuthDetector = {
             const userId = String(user.uin || user.uid || user.id || '');
             const nickname = user.name || user.nickname || user.nick;
             
-            // 确保有有效的用户信息
-            if (userId && nickname && nickname !== '腾讯云用户') {
+            if (userId) {
               log('tencent-cloud', '从 API 获取到用户信息', { userId, nickname });
-              return {
+              const apiState: LoginState = {
                 loggedIn: true,
                 platform: 'tencent-cloud',
                 userId: userId,
-                nickname: nickname,
+                nickname: nickname || '腾讯云用户',
                 avatar: user.avatar || user.avatarUrl,
               };
+
+              const getNicknameFromDom = () =>
+                readTextFromEl(document.querySelector('.uc-hero-name')) ||
+                readTextFromEl(document.querySelector('[class*="hero"][class*="name"]')) ||
+                readTextFromEl(document.querySelector('.com-header-user-name')) ||
+                readTextFromEl(document.querySelector('.user-name'));
+              const getAvatarFromDom = () =>
+                readAvatarUrlFromEl(document.querySelector('.uc-hero-avatar .com-2-avatar-inner')) ||
+                readAvatarUrlFromEl(document.querySelector('.uc-hero-avatar [style*="background-image"]')) ||
+                readAvatarUrlFromEl(document.querySelector('.uc-hero-avatar img')) ||
+                readAvatarUrlFromEl(document.querySelector('.com-header-user-avatar img'));
+
+              const nicknameFromDom = await waitForValue(() => getNicknameFromDom(), { timeoutMs: 1200 });
+              const avatarFromDom = await waitForValue(() => getAvatarFromDom(), { timeoutMs: 1200 });
+
+              const merged: LoginState = {
+                ...apiState,
+                nickname: apiState.nickname && apiState.nickname !== '腾讯云用户' ? apiState.nickname : (nicknameFromDom || apiState.nickname),
+                avatar: apiState.avatar || avatarFromDom,
+              };
+
+              if (!merged.avatar || !merged.nickname || merged.nickname === '腾讯云用户') {
+                const bg = await fetchPlatformInfoFromBackground('tencent-cloud');
+                if (bg?.loggedIn) {
+                  return {
+                    ...bg,
+                    nickname: merged.nickname || bg.nickname,
+                    avatar: merged.avatar || bg.avatar,
+                  };
+                }
+              }
+              return merged;
             }
           }
         }
@@ -553,30 +845,37 @@ const tencentCloudDetector: PlatformAuthDetector = {
       }
     }
     
-    // 检查页面上的用户信息元素
-    try {
-      // 腾讯云开发者社区页面可能有用户头像或昵称元素
-      const userAvatarEl = document.querySelector('.com-header-user-avatar img, .user-avatar img, [class*="avatar"] img') as HTMLImageElement;
-      const userNameEl = document.querySelector('.com-header-user-name, .user-name, [class*="username"]');
-      
-      if (userAvatarEl?.src || userNameEl?.textContent?.trim()) {
-        log('tencent-cloud', '从 DOM 检测到登录状态');
-        return {
-          loggedIn: true,
-          platform: 'tencent-cloud',
-          nickname: userNameEl?.textContent?.trim() || '腾讯云用户',
-          avatar: userAvatarEl?.src,
-        };
-      }
-    } catch {}
-    
     // 检查退出按钮
     const logoutEl = document.querySelector('a[href*="logout"], [class*="logout"]');
     if (logoutEl) {
+      const bg = await fetchPlatformInfoFromBackground('tencent-cloud');
+      if (bg?.loggedIn) return bg;
       return {
         loggedIn: true,
         platform: 'tencent-cloud',
         nickname: '腾讯云用户',
+      };
+    }
+
+    const bg = await fetchPlatformInfoFromBackground('tencent-cloud');
+    if (bg?.loggedIn) {
+      const getNicknameFromDom = () =>
+        readTextFromEl(document.querySelector('.uc-hero-name')) ||
+        readTextFromEl(document.querySelector('[class*="hero"][class*="name"]')) ||
+        readTextFromEl(document.querySelector('.com-header-user-name')) ||
+        readTextFromEl(document.querySelector('.user-name'));
+      const getAvatarFromDom = () =>
+        readAvatarUrlFromEl(document.querySelector('.uc-hero-avatar .com-2-avatar-inner')) ||
+        readAvatarUrlFromEl(document.querySelector('.uc-hero-avatar [style*="background-image"]')) ||
+        readAvatarUrlFromEl(document.querySelector('.uc-hero-avatar img')) ||
+        readAvatarUrlFromEl(document.querySelector('.com-header-user-avatar img'));
+
+      const nicknameFromDom = await waitForValue(() => getNicknameFromDom(), { timeoutMs: 1500 });
+      const avatarFromDom = await waitForValue(() => getAvatarFromDom(), { timeoutMs: 1500 });
+      return {
+        ...bg,
+        nickname: nicknameFromDom || bg.nickname,
+        avatar: avatarFromDom || bg.avatar,
       };
     }
     

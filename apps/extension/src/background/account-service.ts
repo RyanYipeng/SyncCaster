@@ -67,7 +67,8 @@ const PLATFORMS: Record<string, PlatformConfig> = {
     id: 'csdn',
     name: 'CSDN',
     loginUrl: 'https://passport.csdn.net/login',
-    homeUrl: 'https://www.csdn.net/',
+    // 使用“个人中心”页面便于稳定提取昵称/头像（首页多为公共内容）
+    homeUrl: 'https://i.csdn.net/#/user-center/profile',
     urlPattern: /csdn\.net/,
   },
   zhihu: {
@@ -109,7 +110,8 @@ const PLATFORMS: Record<string, PlatformConfig> = {
     id: 'tencent-cloud',
     name: '腾讯云开发者社区',
     loginUrl: 'https://cloud.tencent.com/login',
-    homeUrl: 'https://cloud.tencent.com/developer',
+    // /developer/user 会在登录后进入个人主页（更容易提取昵称/头像）
+    homeUrl: 'https://cloud.tencent.com/developer/user',
     urlPattern: /cloud\.tencent\.com/,
   },
   aliyun: {
@@ -192,7 +194,7 @@ async function ensureContentScriptInjected(tabId: number): Promise<void> {
 /**
  * 向指定标签页发送消息并等待响应
  */
-async function sendMessageToTab(tabId: number, message: any, timeout = 10000): Promise<any> {
+async function sendMessageToTab(tabId: number, message: any, timeout = 25000): Promise<any> {
   // 先确保 content script 已注入
   await ensureContentScriptInjected(tabId);
   
@@ -275,6 +277,73 @@ async function findPlatformTab(platform: string): Promise<chrome.tabs.Tab | null
   return null;
 }
 
+const PROFILE_ENRICH_PLATFORMS = new Set(['wechat', 'tencent-cloud', 'jianshu', 'csdn', '51cto']);
+const GENERIC_NICKNAMES: Record<string, string[]> = {
+  wechat: ['微信公众号'],
+  'tencent-cloud': ['腾讯云用户'],
+  jianshu: ['简书用户'],
+  csdn: ['CSDN用户'],
+  '51cto': ['51CTO用户'],
+};
+
+function isGenericNickname(platform: string, nickname?: string): boolean {
+  if (!nickname) return true;
+  const trimmed = nickname.trim();
+  if (!trimmed) return true;
+  const candidates = GENERIC_NICKNAMES[platform];
+  if (candidates?.includes(trimmed)) return true;
+  const platformName = PLATFORM_NAMES[platform] || platform;
+  return trimmed === `${platformName}用户`;
+}
+
+function pickBetterNickname(platform: string, previous: string, next?: string): string {
+  const nextTrimmed = next?.trim();
+  if (!nextTrimmed) return previous;
+  if (isGenericNickname(platform, nextTrimmed) && !isGenericNickname(platform, previous)) return previous;
+  return nextTrimmed;
+}
+
+function isValidAvatarUrl(url?: string): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower === 'null' || lower === 'undefined' || lower === 'deleted') return false;
+  if (lower === 'about:blank') return false;
+  return true;
+}
+
+function pickBetterAvatar(previous?: string, next?: string): string | undefined {
+  if (isValidAvatarUrl(next)) return next!.trim();
+  return isValidAvatarUrl(previous) ? previous!.trim() : undefined;
+}
+
+function extractUserIdFromAccountId(account: Account): string | undefined {
+  const id = account.id;
+  const platform = account.platform;
+  if (typeof id !== 'string' || typeof platform !== 'string') return undefined;
+
+  const underscorePrefix = `${platform}_`;
+  if (id.startsWith(underscorePrefix)) return id.slice(underscorePrefix.length);
+  const hyphenPrefix = `${platform}-`;
+  if (id.startsWith(hyphenPrefix)) return id.slice(hyphenPrefix.length);
+
+  // 兜底：兼容旧格式 / 平台名包含连字符的情况
+  const underscoreIndex = id.indexOf('_');
+  if (underscoreIndex > 0) {
+    const prefix = id.substring(0, underscoreIndex);
+    if (prefix === platform) return id.substring(underscoreIndex + 1);
+  }
+  const parts = id.split('-');
+  if (parts.length > 1) {
+    if (platform === 'tencent-cloud' && parts.length > 2) {
+      return parts.slice(2).join('-');
+    }
+    return parts.slice(1).join('-');
+  }
+  return undefined;
+}
+
 
 /**
  * 账号服务
@@ -282,6 +351,91 @@ async function findPlatformTab(platform: string): Promise<chrome.tabs.Tab | null
 export class AccountService {
   // 存储登录成功的回调
   private static loginCallbacks: Map<string, (state: LoginState) => void> = new Map();
+
+  private static shouldEnrichProfile(account: Account): boolean {
+    const platform = account.platform;
+    if (!PROFILE_ENRICH_PLATFORMS.has(platform)) return false;
+
+    const profileId = (account.meta as any)?.profileId as string | undefined;
+    const needsProfileId =
+      platform === 'jianshu' &&
+      (!profileId || profileId === 'undefined' || profileId.startsWith('jianshu_') || /^\d+$/.test(profileId));
+
+    const needsNickname = isGenericNickname(platform, account.nickname);
+    const needsAvatar = !account.avatar;
+
+    return needsProfileId || needsNickname || needsAvatar;
+  }
+
+  private static getProfileEnrichUrl(account: Account): string {
+    const config = PLATFORMS[account.platform];
+    if (!config) return '';
+
+    if (account.platform === '51cto') {
+      const uid = String((account.meta as any)?.profileId || extractUserIdFromAccountId(account) || '').trim();
+      if (uid && /^\d+$/.test(uid)) {
+        return `https://home.51cto.com/space?uid=${uid}`;
+      }
+      return config.homeUrl;
+    }
+
+    if (account.platform === 'jianshu') {
+      const slug = String((account.meta as any)?.profileId || extractUserIdFromAccountId(account) || '').trim();
+      if (slug && !/^\d+$/.test(slug) && !slug.startsWith('jianshu_')) {
+        return `https://www.jianshu.com/u/${slug}`;
+      }
+      return config.homeUrl;
+    }
+
+    return config.homeUrl;
+  }
+
+  private static async tryEnrichAccountProfileViaTab(account: Account): Promise<Account | null> {
+    const url = this.getProfileEnrichUrl(account);
+    if (!url) return null;
+
+    let tab: chrome.tabs.Tab | null = null;
+    try {
+      tab = await chrome.tabs.create({ url, active: false });
+      if (!tab.id) return null;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      const state = await checkLoginInTab(tab.id);
+      if (!state.loggedIn) return null;
+
+      const now = Date.now();
+      const enriched: Account = {
+        ...account,
+        nickname: pickBetterNickname(account.platform, account.nickname, state.nickname),
+        avatar: pickBetterAvatar(account.avatar, state.avatar),
+        updatedAt: now,
+        meta: {
+          ...(account.meta || {}),
+          ...(state.meta || {}),
+          ...(state.userId ? { profileId: state.userId } : {}),
+        },
+      };
+
+      await db.accounts.put(enriched);
+      logger.info('enrich', '账号资料已补全', { platform: account.platform, nickname: enriched.nickname });
+      return enriched;
+    } catch (e: any) {
+      logger.warn('enrich', '补全账号资料失败', { platform: account.platform, error: e?.message || String(e) });
+      return null;
+    } finally {
+      if (tab?.id) {
+        try {
+          await chrome.tabs.remove(tab.id);
+        } catch {}
+      }
+    }
+  }
+
+  private static async maybeEnrichAccountProfile(account: Account): Promise<Account> {
+    if (!this.shouldEnrichProfile(account)) return account;
+    const enriched = await this.tryEnrichAccountProfileViaTab(account);
+    return enriched || account;
+  }
   
   /**
    * 初始化：监听来自 content script 的登录成功消息
@@ -370,7 +524,7 @@ export class AccountService {
       
       logger.info('quick-add', '账号添加成功', { nickname: account.nickname });
       
-      return account;
+      return await this.maybeEnrichAccountProfile(account);
     } finally {
       // 如果是我们创建的标签页，关闭它
       if (needCloseTab && tab.id) {
@@ -406,12 +560,13 @@ export class AccountService {
       const state = await checkLoginInTab(existingTab.id);
       if (state.loggedIn) {
         logger.info('add-account', '检测到已登录，直接保存账号');
-        return await this.saveAccount(platform, {
+        const account = await this.saveAccount(platform, {
           userId: state.userId || `${platform}_${Date.now()}`,
           nickname: state.nickname || platformName + '用户',
           avatar: state.avatar,
           platform,
         }, state.meta);
+        return await this.maybeEnrichAccountProfile(account);
       }
     }
     
@@ -450,8 +605,9 @@ export class AccountService {
           try {
             await chrome.tabs.remove(tabId);
           } catch {}
-          
-          resolve(account);
+
+          const enriched = await this.maybeEnrichAccountProfile(account);
+          resolve(enriched);
         } catch (e: any) {
           reject(e);
         }
@@ -493,8 +649,9 @@ export class AccountService {
             try {
               await chrome.tabs.remove(tabId);
             } catch {}
-            
-            resolve(account);
+
+            const enriched = await this.maybeEnrichAccountProfile(account);
+            resolve(enriched);
             return;
           }
         } catch (e: any) {
@@ -665,10 +822,14 @@ export class AccountService {
         // 成功：更新状态为 ACTIVE，重置连续失败次数
         const updated: Account = {
           ...account,
-          nickname: userInfo.nickname || account.nickname,
-          avatar: userInfo.avatar || account.avatar,
+          nickname: pickBetterNickname(account.platform, account.nickname, userInfo.nickname),
+          avatar: pickBetterAvatar(account.avatar, userInfo.avatar),
           updatedAt: now,
-          meta: userInfo.meta || account.meta,
+          meta: {
+            ...(account.meta || {}),
+            ...(userInfo.meta || {}),
+            ...(userInfo.userId ? { profileId: userInfo.userId } : {}),
+          },
           status: AccountStatus.ACTIVE,
           lastCheckAt: now,
           lastError: undefined,
@@ -677,11 +838,31 @@ export class AccountService {
         
         await db.accounts.put(updated);
         logger.info('refresh-account', '账号信息已更新（API）', { nickname: updated.nickname });
+
+        if (this.shouldEnrichProfile(updated)) {
+          const enriched = await this.tryEnrichAccountProfileViaTab(updated);
+          if (enriched) return enriched;
+        }
         return updated;
       }
       
       // 检测失败：根据错误类型决定状态
       const isRetryable = userInfo.retryable === true && userInfo.errorType !== AuthErrorType.LOGGED_OUT;
+
+      // 51CTO：Cookie 结构/分区较容易导致误判，避免把“无法确认”当作失败打扰用户
+      if (account.platform === '51cto' && isRetryable && account.status === AccountStatus.ACTIVE) {
+        logger.info('refresh-account', '51CTO 检测结果不确定，保持 ACTIVE', { error: userInfo.error });
+
+        const updated: Account = {
+          ...account,
+          updatedAt: now,
+          lastCheckAt: now,
+          lastError: `[临时] ${userInfo.error || '检测异常'}`,
+        };
+
+        await db.accounts.put(updated);
+        return updated;
+      }
       
       // 新登录保护：如果在保护期内且错误可重试，保持 ACTIVE 状态
       if (isInProtectionPeriod && isRetryable) {
@@ -788,10 +969,14 @@ export class AccountService {
       // 成功：更新状态为 ACTIVE
       const updated: Account = {
         ...account,
-        nickname: state.nickname || account.nickname,
-        avatar: state.avatar || account.avatar,
+        nickname: pickBetterNickname(account.platform, account.nickname, state.nickname),
+        avatar: pickBetterAvatar(account.avatar, state.avatar),
         updatedAt: now,
-        meta: state.meta || account.meta,
+        meta: {
+          ...(account.meta || {}),
+          ...(state.meta || {}),
+          ...(state.userId ? { profileId: state.userId } : {}),
+        },
         status: AccountStatus.ACTIVE,
         lastCheckAt: now,
         lastError: undefined,
@@ -863,10 +1048,14 @@ export class AccountService {
           // 成功：更新状态为 ACTIVE，重置连续失败次数
           const updated: Account = {
             ...account,
-            nickname: userInfo.nickname || account.nickname,
-            avatar: userInfo.avatar || account.avatar,
+            nickname: pickBetterNickname(account.platform, account.nickname, userInfo.nickname),
+            avatar: pickBetterAvatar(account.avatar, userInfo.avatar),
             updatedAt: now,
-            meta: userInfo.meta || account.meta,
+            meta: {
+              ...(account.meta || {}),
+              ...(userInfo.meta || {}),
+              ...(userInfo.userId ? { profileId: userInfo.userId } : {}),
+            },
             status: AccountStatus.ACTIVE,
             lastCheckAt: now,
             lastError: undefined,
@@ -878,6 +1067,22 @@ export class AccountService {
         } else {
           // 检测失败：根据错误类型决定状态
           const isRetryable = userInfo.retryable === true && userInfo.errorType !== AuthErrorType.LOGGED_OUT;
+
+          // 51CTO：Cookie 结构/分区较容易导致误判，避免把“无法确认”当做失效打扰用户
+          if (platform === '51cto' && isRetryable && account.status === AccountStatus.ACTIVE) {
+            logger.info('refresh-all', '51CTO 检测结果不确定，保持 ACTIVE', { error: userInfo.error });
+
+            const updated: Account = {
+              ...account,
+              updatedAt: now,
+              lastCheckAt: now,
+              lastError: `[临时] ${userInfo.error || '检测异常'}`,
+            };
+
+            await db.accounts.put(updated);
+            success.push(updated);
+            continue;
+          }
           
           // 新登录保护：如果在保护期内且错误可重试，保持 ACTIVE 状态
           if (isInProtectionPeriod && isRetryable) {
@@ -913,13 +1118,13 @@ export class AccountService {
           };
           
           await db.accounts.put(updated);
-          
+
           // 传递错误类型和是否可重试信息，返回更新后的账号
-          failed.push({ 
-            account: updated, 
+          failed.push({
+            account: updated,
             error: userInfo.error || '登录已失效',
             errorType: userInfo.errorType,
-            retryable: isRetryable
+            retryable: isRetryable,
           });
         }
       }
@@ -1003,12 +1208,16 @@ export class AccountService {
           const now = Date.now();
           
           // 更新账号状态为 ACTIVE，重置连续失败次数，清除错误信息
-          const updated: Account = {
-            ...account,
-            nickname: state.nickname || account.nickname,
-            avatar: state.avatar || account.avatar,
-            updatedAt: now,
-            meta: state.meta || account.meta,
+           const updated: Account = {
+             ...account,
+             nickname: pickBetterNickname(account.platform, account.nickname, state.nickname),
+             avatar: pickBetterAvatar(account.avatar, state.avatar),
+             updatedAt: now,
+             meta: {
+               ...(account.meta || {}),
+               ...(state.meta || {}),
+              ...(state.userId ? { profileId: state.userId } : {}),
+            },
             status: AccountStatus.ACTIVE,
             lastCheckAt: now,
             lastError: undefined,
@@ -1022,8 +1231,9 @@ export class AccountService {
           try {
             await chrome.tabs.remove(tabId);
           } catch {}
-          
-          resolve(updated);
+
+          const enriched = await this.maybeEnrichAccountProfile(updated);
+          resolve(enriched);
         } catch (e: any) {
           reject(e);
         }
@@ -1058,12 +1268,16 @@ export class AccountService {
             const now = Date.now();
             
             // 更新账号状态为 ACTIVE，重置连续失败次数，清除错误信息
-            const updated: Account = {
-              ...account,
-              nickname: state.nickname || account.nickname,
-              avatar: state.avatar || account.avatar,
-              updatedAt: now,
-              meta: state.meta || account.meta,
+             const updated: Account = {
+               ...account,
+               nickname: pickBetterNickname(account.platform, account.nickname, state.nickname),
+               avatar: pickBetterAvatar(account.avatar, state.avatar),
+               updatedAt: now,
+               meta: {
+                 ...(account.meta || {}),
+                 ...(state.meta || {}),
+                ...(state.userId ? { profileId: state.userId } : {}),
+              },
               status: AccountStatus.ACTIVE,
               lastCheckAt: now,
               lastError: undefined,
@@ -1077,8 +1291,9 @@ export class AccountService {
             try {
               await chrome.tabs.remove(tabId);
             } catch {}
-            
-            resolve(updated);
+
+            const enriched = await this.maybeEnrichAccountProfile(updated);
+            resolve(enriched);
             return;
           }
         } catch (e: any) {
