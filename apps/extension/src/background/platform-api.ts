@@ -575,15 +575,23 @@ const csdnApi: PlatformApiConfig = {
         const data = await res.json();
         logger.info('csdn', 'API 响应', data);
         
-        if (data.code === 200 && data.data) {
-          const user = data.data;
+        const payload = data?.data || data?.result || data;
+        const okCode =
+          data?.code === 200 ||
+          data?.code === '200' ||
+          data?.status === 200 ||
+          data?.status === '200' ||
+          data?.success === true;
+
+        if (okCode && payload) {
+          const user = payload;
           logger.info('csdn', '从 API 获取到用户信息', { username: user.username, nickname: user.nickname });
           return {
             loggedIn: true,
             platform: 'csdn',
-            userId: user.username,
-            nickname: user.nickname || user.username,
-            avatar: user.avatar,
+            userId: user.username || user.userName || user.user_name || user.loginName || user.name,
+            nickname: user.nickname || user.nickName || user.name || user.username || user.userName || user.user_name,
+            avatar: user.avatar || user.avatarUrl || user.headUrl || user.head_url || user.avatar_url,
             meta: {
               level: user.level,
               followersCount: user.fansNum,
@@ -610,15 +618,23 @@ const csdnApi: PlatformApiConfig = {
         const data = await res.json();
         logger.info('csdn', '备用 API 响应', data);
         
-        if (data.code === 200 && data.data) {
-          const user = data.data;
+        const payload = data?.data || data?.result || data;
+        const okCode =
+          data?.code === 200 ||
+          data?.code === '200' ||
+          data?.status === 200 ||
+          data?.status === '200' ||
+          data?.success === true;
+
+        if (okCode && payload) {
+          const user = payload;
           logger.info('csdn', '从备用 API 获取到用户信息');
           return {
             loggedIn: true,
             platform: 'csdn',
-            userId: user.username,
-            nickname: user.nickName || user.username,
-            avatar: user.avatar,
+            userId: user.username || user.userName || user.user_name || user.loginName || user.name,
+            nickname: user.nickName || user.nickname || user.name || user.username || user.userName || user.user_name,
+            avatar: user.avatar || user.avatarUrl || user.headUrl || user.head_url || user.avatar_url,
             detectionMethod: 'api',
           };
         }
@@ -786,6 +802,42 @@ const jianshuApi: PlatformApiConfig = {
   id: 'jianshu',
   name: '简书',
   async fetchUserInfo(): Promise<UserInfo> {
+    const tryParseProfileFromHtml = async (): Promise<Pick<UserInfo, 'userId' | 'nickname' | 'avatar'> | null> => {
+      const res = await fetchWithCookies(
+        'https://www.jianshu.com/settings/basic',
+        {
+          headers: {
+            Accept: 'text/html,application/xhtml+xml',
+            Referer: 'https://www.jianshu.com/',
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+          },
+        },
+        0
+      );
+
+      const finalUrl = res.url || 'https://www.jianshu.com/settings/basic';
+      if (finalUrl.includes('/sign_in')) return null;
+
+      const html = await res.text();
+      const slugMatch = html.match(/href=['"]\/u\/([a-zA-Z0-9]+)['"]/);
+      const slug = slugMatch?.[1];
+      if (slug && /^\d+$/.test(slug)) return null;
+
+      const nameMatch =
+        html.match(/<a[^>]*\bclass=['"][^"']*\bname\b[^"']*['"][^>]*\bhref=['"]\/u\/[a-zA-Z0-9]+['"][^>]*>([^<]+)<\/a>/i) ||
+        html.match(/<a[^>]*\bhref=['"]\/u\/[a-zA-Z0-9]+['"][^>]*\bclass=['"][^"']*\bname\b[^"']*['"][^>]*>([^<]+)<\/a>/i);
+      const nickname = nameMatch?.[1]?.trim();
+
+      const avatarMatch =
+        html.match(/<a[^>]*\bclass=['"][^"']*\bavatar\b[^"']*['"][^>]*>[\s\S]*?<img[^>]*\bsrc=['"]([^'"]+)['"]/i) ||
+        html.match(/<img[^>]*\bsrc=['"]([^'"]+)['"][^>]*\bclass=['"][^"']*\bavatar\b[^"']*['"]/i);
+      const avatar = avatarMatch?.[1]?.trim();
+
+      if (!slug && !nickname && !avatar) return null;
+      return { userId: slug, nickname, avatar };
+    };
+
     // 先尝试 API
     try {
       const res = await fetchWithCookies('https://www.jianshu.com/shakespeare/v2/user/info', {
@@ -832,12 +884,30 @@ const jianshuApi: PlatformApiConfig = {
     
     // 简书的关键 Cookie
     const rememberToken = cookies.find(c => c.name === 'remember_user_token' && c.value && c.value.length > 10);
+    const sessionCore = cookies.find(c => c.name === '_m7e_session_core' && c.value && c.value.length > 10);
     const sensorsData = cookies.find(c => c.name.includes('sensorsdata') && c.value);
     
-    if (rememberToken || sensorsData) {
+    if (rememberToken || sessionCore || sensorsData) {
       logger.info('jianshu', '检测到有效的登录 Cookie，判定为已登录');
-      // 注意：Cookie 检测无法获取 slug，所以不设置 userId
-      // 这样点击用户名时会跳转到设置页面而不是错误的主页
+
+      // 尝试用 HTML 探针从设置页提取昵称/slug（不打开标签页）
+      try {
+        const profile = await tryParseProfileFromHtml();
+        if (profile) {
+          return {
+            loggedIn: true,
+            platform: 'jianshu',
+            userId: profile.userId,
+            nickname: profile.nickname || '简书用户',
+            avatar: profile.avatar,
+            detectionMethod: 'html',
+          };
+        }
+      } catch (e: any) {
+        logger.warn('jianshu', 'HTML 探针失败', { error: e?.message || String(e) });
+      }
+
+      // 注意：Cookie 检测无法稳定获取 slug，所以不强行设置 userId
       return {
         loggedIn: true,
         platform: 'jianshu',

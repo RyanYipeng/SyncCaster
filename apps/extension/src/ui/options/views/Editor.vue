@@ -58,7 +58,7 @@
           <!-- 打开公众号编辑器按钮 -->
           <button
             @click="openMdEditor"
-            class="px-3 py-1 text-xs rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors"
+            class="px-3 py-1 text-xs rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none"
             title="在新标签页中打开完整的公众号编辑器"
           >
             🚀 打开公众号编辑器
@@ -90,9 +90,9 @@
 
       <!-- 操作按钮：移到正文下方 -->
       <div class="flex gap-2 pt-2 border-t">
-        <button class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors" @click="save">保存</button>
-        <button class="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 transition-colors" @click="goBack">返回</button>
-        <button class="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 transition-colors" @click="publish">发布</button>
+        <button class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="save">保存</button>
+        <button class="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="goBack">返回</button>
+        <button class="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="publish">发布</button>
       </div>
 
       <!-- 图片资源：移到按钮下方 -->
@@ -154,6 +154,23 @@
         class="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50"
       >
         ✓ {{ copyTipMessage }}
+      </div>
+    </transition>
+
+    <!-- 验证错误提示 -->
+    <transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0 translate-y-2"
+      enter-to-class="opacity-100 translate-y-0"
+      leave-active-class="transition duration-150 ease-in"
+      leave-from-class="opacity-100 translate-y-0"
+      leave-to-class="opacity-0 translate-y-2"
+    >
+      <div
+        v-if="showValidationTip"
+        class="fixed bottom-4 right-4 bg-orange-500 text-white px-4 py-2 rounded-lg shadow-lg z-50"
+      >
+        ⚠️ {{ validationTipMessage }}
       </div>
     </transition>
 
@@ -421,7 +438,29 @@ async function load() {
   }
 }
 
+// 保存验证提示
+const showValidationTip = ref(false);
+const validationTipMessage = ref('');
+
+function showValidationError(message: string) {
+  validationTipMessage.value = message;
+  showValidationTip.value = true;
+  setTimeout(() => {
+    showValidationTip.value = false;
+  }, 2000);
+}
+
 async function save() {
+  // 验证标题和正文
+  if (!title.value.trim()) {
+    showValidationError('请输入文章标题');
+    return;
+  }
+  if (!body.value.trim()) {
+    showValidationError('请输入文章正文');
+    return;
+  }
+
   if (!id.value || id.value === 'new') {
     const now = Date.now();
     const newId = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
@@ -430,18 +469,19 @@ async function save() {
     await db.posts.add({
       id: newId,
       version: 1,
-      title: title.value || '未命名标题',
+      title: title.value,
       summary: (body.value || '').slice(0, 200),
       canonicalUrl: '',
       createdAt: now,
       updatedAt: now,
-      body_md: body.value || '',
+      body_md: body.value,
       tags: [],
       categories: [],
       assets: [],
       meta: {},
     } as any);
     window.location.hash = `editor/${newId}`;
+    showCopySuccess('文章已保存');
     return;
   }
   await db.posts.update(id.value, {
@@ -450,7 +490,7 @@ async function save() {
     summary: (body.value || '').slice(0, 200),
     updatedAt: Date.now(),
   } as any);
-  alert('已保存');
+  showCopySuccess('文章已保存');
 }
 
 function goBack() {

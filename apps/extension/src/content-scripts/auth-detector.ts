@@ -223,13 +223,30 @@ const juejinDetector: PlatformAuthDetector = {
       readAvatarUrlFromEl(document.querySelector('img[src*="profile-avatar.csdnimg.cn"]')) ||
        readAvatarUrlFromEl(document.querySelector('[class*="user-profile"][class*="avatar"]'));
 
+     const getReliableNicknameFromDom = () => {
+       const value = getNicknameFromDom();
+       if (!value) return undefined;
+       const trimmed = value.trim();
+       if (!trimmed) return undefined;
+       if (trimmed === 'CSDN用户') return undefined;
+       return trimmed;
+     };
+     const getReliableAvatarFromDom = () => {
+       const value = getAvatarFromDom();
+       if (!value) return undefined;
+       const trimmed = value.trim();
+       if (!trimmed) return undefined;
+       if (trimmed === 'about:blank') return undefined;
+       return trimmed;
+     };
+
      // i.csdn.net 个人中心页经常是 hash 路由，且可能重定向到相近路径；只要 DOM 结构出现就视为“个人中心上下文”
      const hasUserCenterDom = isIHost && !!document.querySelector('.user-profile-head-name, .user-profile-avatar');
 
      if (isUserCenterPage || hasUserCenterDom) {
        // 该页面未登录时通常会引导跳转/展示登录入口，昵称/头像元素不会出现
-       const nicknameFromDom = await waitForValue(() => getNicknameFromDom(), { timeoutMs: 10000 });
-       const avatarFromDom = await waitForValue(() => getAvatarFromDom(), { timeoutMs: 10000 });
+       const nicknameFromDom = await waitForValue(() => getReliableNicknameFromDom(), { timeoutMs: 10000 });
+       const avatarFromDom = await waitForValue(() => getReliableAvatarFromDom(), { timeoutMs: 10000 });
        if (nicknameFromDom || avatarFromDom) {
          const cookieUser = getUserNameFromCookie();
          const bg = await fetchPlatformInfoFromBackground('csdn');
@@ -240,7 +257,7 @@ const juejinDetector: PlatformAuthDetector = {
            avatar: avatarFromDom || bg?.avatar,
          };
        }
-     }
+      }
     
     // 优先使用 API
     try {
@@ -528,12 +545,22 @@ const jianshuDetector: PlatformAuthDetector = {
         log('jianshu', 'API 调用失败', e);
       }
     
-    // 尝试从页面 URL 提取用户 slug（如果在用户主页）
-    const url = window.location.href;
-    const slugMatch = url.match(/jianshu\.com\/u\/([a-zA-Z0-9]+)/);
-    if (slugMatch) {
-      log('jianshu', '从 URL 提取到用户 slug', { slug: slugMatch[1] });
-    }
+     const isValidSlug = (value: unknown): value is string => {
+       if (typeof value !== 'string') return false;
+       const trimmed = value.trim();
+       if (!trimmed) return false;
+       if (!/^[a-zA-Z0-9]+$/.test(trimmed)) return false;
+       // 简书 slug 不是纯数字
+       if (/^\d+$/.test(trimmed)) return false;
+       return true;
+     };
+
+     // 尝试从页面 URL 提取用户 slug（如果在用户主页）
+     const url = window.location.href;
+     const slugMatch = url.match(/jianshu\.com\/u\/([a-zA-Z0-9]+)/);
+     if (slugMatch) {
+       log('jianshu', '从 URL 提取到用户 slug', { slug: slugMatch[1] });
+     }
 
     // DOM: 仅用于补齐昵称/头像（不要仅凭“用户主页信息”判断登录）
     const slugFromDom = (() => {
@@ -557,15 +584,19 @@ const jianshuDetector: PlatformAuthDetector = {
       readAvatarUrlFromEl(document.querySelector('.user .avatar img')) ||
       readAvatarUrlFromEl(document.querySelector('.avatar-wrapper img'));
 
-    const bg = await fetchPlatformInfoFromBackground('jianshu');
-    if (bg?.loggedIn) {
-      return {
-        ...bg,
-        userId: slugMatch?.[1] || slugFromDom || bg.userId,
-        nickname: nicknameFromDom || bg.nickname,
-        avatar: avatarFromDom || bg.avatar,
-      };
-    }
+     const bg = await fetchPlatformInfoFromBackground('jianshu');
+     if (bg?.loggedIn) {
+       const bestSlug =
+         (isValidSlug(slugMatch?.[1]) ? slugMatch?.[1] : undefined) ||
+         (isValidSlug(slugFromDom) ? slugFromDom : undefined) ||
+         (isValidSlug(bg.userId) ? bg.userId : undefined);
+       return {
+         ...bg,
+         userId: bestSlug || bg.userId,
+         nickname: nicknameFromDom || bg.nickname,
+         avatar: avatarFromDom || bg.avatar,
+       };
+     }
     
     return { loggedIn: false, platform: 'jianshu' };
   },

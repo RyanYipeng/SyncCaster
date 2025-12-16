@@ -83,28 +83,34 @@
             </template>
           </n-thing>
           <template #suffix>
-            <n-space>
+            <n-space vertical size="small" align="end">
               <!-- 7.3: Conditional re-login button -->
               <n-button 
                 v-if="account.status === 'expired'" 
-                text 
                 type="warning" 
+                size="small"
+                secondary
                 :loading="reloginLoadingMap[account.id]"
                 @click="reloginAccount(account)"
               >
-                重新登录
+                🔑 重新登录
               </n-button>
               <n-button 
                 v-else 
-                text 
                 type="primary" 
+                size="small"
+                secondary
                 @click="refreshAccount(account)"
               >
-                刷新
+                🔄 刷新
               </n-button>
-              <n-switch v-model:value="account.enabled" @update:value="toggleAccount(account)" />
-              <n-button text type="error" @click="deleteAccount(account)">
-                删除
+              <n-button 
+                type="error" 
+                size="small"
+                quaternary
+                @click="deleteAccount(account)"
+              >
+                🗑️ 删除
               </n-button>
             </n-space>
           </template>
@@ -371,19 +377,6 @@ function goToUserProfile(account: Account) {
     
     const url = urlFn(userId);
     window.open(url, '_blank');
-  }
-}
-
-async function toggleAccount(account: Account) {
-  try {
-    await db.accounts.update(account.id, {
-      enabled: account.enabled,
-      updatedAt: Date.now(),
-    });
-    message.success(account.enabled ? '账号已启用' : '账号已禁用');
-  } catch (error) {
-    console.error('Failed to toggle account:', error);
-    message.error('操作失败');
   }
 }
 
