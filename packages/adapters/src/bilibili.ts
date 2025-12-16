@@ -63,7 +63,7 @@ export const bilibiliAdapter: PlatformAdapter = {
       'https://member.bilibili.com/platform/upload/text/edit*',
       'https://member.bilibili.com/article-text/home*',
     ],
-    async fillAndPublish(payload) {
+    fillAndPublish: async function (payload) {
       console.log('[bilibili] fillAndPublish starting', payload);
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

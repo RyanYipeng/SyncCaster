@@ -64,7 +64,7 @@ export const aliyunAdapter: PlatformAdapter = {
     matchers: [
       'https://developer.aliyun.com/article/new*',
     ],
-    async fillAndPublish(payload) {
+    fillAndPublish: async function (payload) {
       console.log('[aliyun] fillAndPublish starting', payload);
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

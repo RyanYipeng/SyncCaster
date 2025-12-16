@@ -59,7 +59,7 @@ export const jianshuAdapter: PlatformAdapter = {
     matchers: [
       'https://www.jianshu.com/writer*',
     ],
-    async fillAndPublish(payload) {
+    fillAndPublish: async function (payload) {
       console.log('[jianshu] fillAndPublish starting', payload);
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

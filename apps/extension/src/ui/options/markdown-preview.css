@@ -1,0 +1,129 @@
+.markdown-preview {
+  font-size: 14px;
+  line-height: 1.75;
+  color: #111827;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3,
+.markdown-preview h4 {
+  margin: 1.2em 0 0.6em;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.markdown-preview h1 {
+  font-size: 1.6em;
+}
+.markdown-preview h2 {
+  font-size: 1.35em;
+}
+.markdown-preview h3 {
+  font-size: 1.15em;
+}
+
+.markdown-preview p {
+  margin: 0.75em 0;
+}
+
+.markdown-preview a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.markdown-preview blockquote {
+  margin: 1em 0;
+  padding: 0.75em 1em;
+  border-left: 4px solid #e5e7eb;
+  background: #f9fafb;
+  color: #374151;
+  border-radius: 8px;
+}
+
+.markdown-preview hr {
+  border: 0;
+  border-top: 1px solid #e5e7eb;
+  margin: 1.25em 0;
+}
+
+.markdown-preview code {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    'Liberation Mono',
+    'Courier New',
+    monospace;
+  font-size: 0.95em;
+}
+
+.markdown-preview :not(pre) > code {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  padding: 0.15em 0.35em;
+  border-radius: 6px;
+  white-space: break-spaces;
+}
+
+.markdown-preview pre {
+  margin: 1em 0;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  overflow-x: auto;
+}
+
+.markdown-preview pre.md-code-block {
+  background: #f8fafc !important;
+}
+
+.markdown-preview pre code {
+  display: block;
+  background: transparent;
+  border: 0;
+  padding: 12px 14px;
+  white-space: pre;
+}
+
+.markdown-preview .md-table-wrap {
+  margin: 1em 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow-x: auto;
+  background: #fff;
+}
+
+.markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 520px;
+}
+
+.markdown-preview thead th {
+  background: #f9fafb;
+  font-weight: 600;
+  text-align: left;
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  vertical-align: top;
+}
+
+.markdown-preview tbody tr:nth-child(2n) td {
+  background: #fcfcfd;
+}
+
+.markdown-preview ul,
+.markdown-preview ol {
+  margin: 0.75em 0;
+  padding-left: 1.5em;
+}
+
+.markdown-preview li {
+  margin: 0.25em 0;
+}

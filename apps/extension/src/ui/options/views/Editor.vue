@@ -92,6 +92,7 @@
       <div class="flex gap-2 pt-2 border-t">
         <button class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="save">保存</button>
         <button class="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="goBack">返回</button>
+        <button class="px-4 py-2 rounded bg-purple-600 text-white hover:bg-purple-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="previewPost">👁️ 预览</button>
         <button class="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="publish">发布</button>
       </div>
 
@@ -196,9 +197,9 @@
             <h3 class="text-xl font-bold text-gray-800">发布文章</h3>
             <button
               @click="closePublishDialog"
-              class="text-gray-400 hover:text-gray-600 transition-colors"
+              class="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors border-0 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -271,13 +272,6 @@
           <!-- 对话框底部 -->
           <div class="sticky bottom-0 bg-white border-t border-gray-200 px-6 py-4 flex gap-3 rounded-b-2xl">
             <button
-              @click="previewPost"
-              class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
-              :disabled="!title && !body"
-            >
-              👁️ 预览
-            </button>
-            <button
               @click="confirmPublish"
               class="flex-1 px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
               :disabled="selectedAccounts.length === 0 || publishing"
@@ -312,9 +306,9 @@
             <h3 class="text-xl font-bold text-gray-800">文章预览</h3>
             <button
               @click="closePreview"
-              class="text-gray-400 hover:text-gray-600 transition-colors"
+              class="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors border-0 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -324,7 +318,7 @@
           <div class="p-8">
             <h1 class="text-3xl font-bold text-gray-900 mb-4">{{ title || '未命名标题' }}</h1>
             <div class="text-sm text-gray-500 mb-6">字数：{{ body.length }} · 图片：{{ images.length }}</div>
-            <div class="prose prose-lg max-w-none" v-html="previewHtml"></div>
+            <div class="markdown-preview" v-html="previewHtml"></div>
           </div>
         </div>
       </div>
@@ -335,8 +329,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { db, type Account, ChromeStorageBridge, type SyncCasterArticle } from '@synccaster/core';
-import { marked } from 'marked';
+import { db, type Account, ChromeStorageBridge, type SyncCasterArticle, AccountStatus } from '@synccaster/core';
+import { renderMarkdownPreview } from '../utils/markdown-preview';
 
 defineProps<{ isDark?: boolean }>();
 
@@ -356,8 +350,6 @@ const publishing = ref(false);
 const enabledAccounts = ref<Account[]>([]);
 const selectedAccounts = ref<string[]>([]);
 
-
-
 // 计算是否全选
 const allSelected = computed(() => {
   return enabledAccounts.value.length > 0 && 
@@ -368,7 +360,7 @@ const allSelected = computed(() => {
 const previewHtml = computed(() => {
   if (!body.value) return '<p class="text-gray-400">暂无内容</p>';
   try {
-    return marked(body.value);
+    return renderMarkdownPreview(body.value);
   } catch {
     return `<pre class="text-red-500">Markdown 解析失败</pre>`;
   }

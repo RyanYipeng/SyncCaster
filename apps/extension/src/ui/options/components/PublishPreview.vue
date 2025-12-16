@@ -57,8 +57,8 @@
         <h1 class="text-2xl font-bold mb-4 text-gray-900">{{ title }}</h1>
 
         <!-- 内容预览 -->
-        <div 
-          class="prose prose-sm max-w-none"
+        <div
+          class="markdown-preview"
           :class="previewClass"
           v-html="previewHtml"
         ></div>
@@ -103,8 +103,8 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
-import { marked } from 'marked';
 import { mdToWechatHtmlRaw, type WechatFormatOptions } from '@synccaster/core';
+import { renderMarkdownPreview } from '../utils/markdown-preview';
 
 const props = defineProps<{
   title: string;
@@ -216,7 +216,7 @@ const previewClass = computed(() => {
 const previewHtml = computed(() => {
   if (!props.content) return '<p class="text-gray-400">暂无内容</p>';
   try {
-    return marked(props.content);
+    return renderMarkdownPreview(props.content);
   } catch (error) {
     return `<pre class="text-red-500">Markdown 解析失败</pre>`;
   }

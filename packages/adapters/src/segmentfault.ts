@@ -75,7 +75,7 @@ export const segmentfaultAdapter: PlatformAdapter = {
     matchers: [
       'https://segmentfault.com/write*',
     ],
-    async fillAndPublish(payload) {
+    fillAndPublish: async function (payload) {
       console.log('[segmentfault] fillAndPublish starting', payload);
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

@@ -55,7 +55,7 @@ export const cnblogsAdapter: PlatformAdapter = {
       'https://i.cnblogs.com/posts/edit*',
       'https://i.cnblogs.com/EditPosts.aspx*',
     ],
-    async fillAndPublish(payload) {
+    fillAndPublish: async function (payload) {
       console.log('[cnblogs] fillAndPublish starting', payload);
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

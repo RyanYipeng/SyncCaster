@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "pnpm run build:md-editor && vite build",
+    "build:fast": "vite build",
     "build:extension-only": "vite build",
     "build:md-editor": "npx tsx scripts/build-md-editor.ts",
     "preview": "vite preview"
@@ -14,6 +15,8 @@
     "@synccaster/adapters": "workspace:*",
     "@synccaster/core": "workspace:*",
     "@synccaster/utils": "workspace:*",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.16.25",
     "marked": "^17.0.0",
     "naive-ui": "^2.36.0",
     "pinia": "^2.1.7",

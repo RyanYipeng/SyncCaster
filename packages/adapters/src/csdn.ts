@@ -54,7 +54,7 @@ export const csdnAdapter: PlatformAdapter = {
       'https://mp.csdn.net/mp_blog/creation/editor*',
       'https://editor.csdn.net/md/*',
     ],
-    async fillAndPublish(payload) {
+    fillAndPublish: async function (payload) {
       console.log('[csdn] fillAndPublish starting', payload);
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

@@ -246,7 +246,7 @@ export async function publishToTarget(
             throw new Error('获取微信编辑页面失败，请确保已登录微信公众号');
           }
         } else {
-          targetUrl = dom.matchers?.[0];
+          targetUrl = toDomOpenUrl(dom.matchers?.[0] || '');
         }
         
         if (!targetUrl) {
@@ -287,7 +287,7 @@ export async function publishToTarget(
         if ((adapter as any).dom) {
           await jobLogger({ level: 'warn', step: 'publish', message: 'API 失败，尝试 DOM 降级' });
           const dom = (adapter as any).dom as { matchers: string[]; fillAndPublish: Function };
-          const targetUrl = dom.matchers?.[0];
+          const targetUrl = toDomOpenUrl(dom.matchers?.[0] || '');
           if (targetUrl) {
             result = await executeInOrigin(targetUrl, dom.fillAndPublish as any, [payload], { closeTab: true, active: false });
           } else {
@@ -395,6 +395,13 @@ const PLATFORM_URLS: Record<string, string> = {
   bilibili: 'https://www.bilibili.com/',
   oschina: 'https://www.oschina.net/',
 };
+
+function toDomOpenUrl(matcherOrUrl: string) {
+  // DOM adapter matchers 通常包含通配符（用于匹配页面），但 executeInOrigin 需要真实 URL。
+  // 规则：取第一个 `*` 之前的部分作为可打开的 URL（避免把 `*` 当作字面量打开）。
+  const idx = matcherOrUrl.indexOf('*');
+  return idx >= 0 ? matcherOrUrl.slice(0, idx) : matcherOrUrl;
+}
 
 /**
  * 在目标平台页面中执行图片上传
@@ -963,4 +970,3 @@ async function blobToBase64(blob: Blob): Promise<string> {
   const mimeType = blob.type || 'image/png';
   return `data:${mimeType};base64,${base64}`;
 }
-

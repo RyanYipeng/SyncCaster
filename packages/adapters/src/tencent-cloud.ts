@@ -53,7 +53,7 @@ export const tencentCloudAdapter: PlatformAdapter = {
     matchers: [
       'https://cloud.tencent.com/developer/article/write*',
     ],
-    async fillAndPublish(payload) {
+    fillAndPublish: async function (payload) {
       console.log('[tencent-cloud] fillAndPublish starting', payload);
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
