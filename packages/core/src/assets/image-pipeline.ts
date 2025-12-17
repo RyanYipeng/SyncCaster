@@ -841,12 +841,13 @@ export class ImageUploadPipeline {
     content: string,
     urlMapping: Map<string, string>
   ): string {
-    let result = content;
+    // 修正常见的“图片 URL 被换行/空格打断”问题（例如 `. jpeg`），否则 Markdown 无法识别图片。
+    let result = normalizeMarkdownImageLinkDestinations(content);
 
     for (const [originalUrl, newUrl] of urlMapping) {
       // 替换 Markdown 图片语法
       const mdPattern = new RegExp(
-        `!\\[([^\\]]*)\\]\\(${escapeRegExp(originalUrl)}\\)`,
+        `!\\[([^\\]]*)\\]\\(\\s*<?${escapeRegExp(originalUrl)}>?\\s*\\)`,
         'g'
       );
       result = result.replace(mdPattern, `![$1](${newUrl})`);
@@ -861,6 +862,31 @@ export class ImageUploadPipeline {
 
     return result;
   }
+}
+
+function normalizeMarkdownImageLinkDestinations(markdown: string): string {
+  if (!markdown) return markdown;
+
+  return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, rawInner: string) => {
+    let inner = String(rawInner || '').trim();
+
+    // 处理可选 title（通常从引号开始），避免破坏 title 内的空格
+    let titlePart = '';
+    const quoteIdx = inner.search(/["']/);
+    if (quoteIdx > 0) {
+      titlePart = inner.slice(quoteIdx).trim();
+      inner = inner.slice(0, quoteIdx).trimEnd();
+    }
+
+    // 支持 ![](<url>) 写法：去掉包裹的尖括号
+    if (inner.startsWith('<') && inner.endsWith('>')) {
+      inner = inner.slice(1, -1);
+    }
+
+    // 去除 URL 中的空白（换行/空格/制表符）
+    const normalizedUrl = inner.replace(/\s+/g, '');
+    return `![${alt}](${normalizedUrl}${titlePart ? ' ' + titlePart : ''})`;
+  });
 }
 
 /**

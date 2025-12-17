@@ -30,3 +30,4 @@ export * from './adapters';
 export * from './assets';
 export * from './platforms/configs';
 export * from './wechat';
+export * from './markdown/paste';

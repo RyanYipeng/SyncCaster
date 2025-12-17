@@ -509,84 +509,192 @@ async function executeJob(jobId: string) {
     return;
   }
   
-  logger.info('job', `Executing job: ${jobId}`, { targets: job.targets.length });
+  logger.info('job', `Executing job: ${jobId}`, { 
+    targets: job.targets.length,
+    platforms: job.targets.map(t => t.platform).join(', ')
+  });
   
   try {
     let successCount = 0;
     let failCount = 0;
+    let unconfirmedCount = 0;
+    const results: NonNullable<Job['results']> = [];
 
-    for (let i = 0; i < job.targets.length; i++) {
-      const target = job.targets[i];
+    const total = job.targets.length;
+    const activeTab = total === 1;
+    const concurrency = Math.min(4, Math.max(1, total));
+    let completed = 0;
+
+    const updateProgress = async () => {
+      const progress = Math.round((completed / total) * 100);
+      await db.jobs.update(jobId, { progress, results, updatedAt: Date.now() } as any);
+    };
+
+    const runTarget = async (target: any) => {
       const startAt = Date.now();
-
-      // 更新进度（开始此目标）
-      const progressStart = Math.round((i / job.targets.length) * 100);
-      await db.jobs.update(jobId, { progress: progressStart, updatedAt: Date.now() });
-
       logger.info('job', `Publishing to ${target.platform}`, { jobId, target });
 
-      const result = await publishToTarget(jobId, post as any, target as any);
+      const result = await publishToTarget(jobId, post as any, target as any, { activeTab });
+
+      logger.info('job', `Publish result for ${target.platform}`, {
+        success: result.success,
+        url: result.url,
+        error: result.error,
+        unconfirmed: result?.meta?.unconfirmed,
+      });
+
+      const isUnconfirmed = result?.meta?.unconfirmed === true;
 
       if (result.success) {
         successCount++;
-        // 写入平台映射
+        results.push({
+          platform: target.platform,
+          accountId: target.accountId,
+          status: 'PUBLISHED',
+          url: result.url,
+          updatedAt: Date.now(),
+        });
         const existing = await db.platformMaps
           .where('postId')
           .equals(job.postId)
           .and((m) => m.platform === target.platform && m.accountId === target.accountId)
           .first();
 
+        const updates: any = {
+          url: result.url,
+          remoteId: result.remoteId,
+          status: 'PUBLISHED',
+          lastSyncAt: Date.now(),
+          meta: { ...(existing?.meta || {}), lastDurationMs: Date.now() - startAt },
+        };
+
         if (existing) {
-          await db.platformMaps.update(existing.id, {
-            url: result.url,
-            remoteId: result.remoteId,
-            status: 'PUBLISHED',
-            lastSyncAt: Date.now(),
-            meta: { ...(existing.meta || {}), lastDurationMs: Date.now() - startAt },
-          });
+          await db.platformMaps.update(existing.id, updates);
         } else {
           await db.platformMaps.add({
             id: crypto.randomUUID(),
             postId: job.postId,
             platform: target.platform,
             accountId: target.accountId,
-            url: result.url,
-            remoteId: result.remoteId,
-            status: 'PUBLISHED',
-            lastSyncAt: Date.now(),
-            meta: { lastDurationMs: Date.now() - startAt },
+            ...updates,
+          } as any);
+        }
+      } else if (isUnconfirmed) {
+        unconfirmedCount++;
+        results.push({
+          platform: target.platform,
+          accountId: target.accountId,
+          status: 'UNCONFIRMED',
+          url: result?.meta?.currentUrl || undefined,
+          error: result.error || '未能确认发布成功',
+          updatedAt: Date.now(),
+        });
+        const existing = await db.platformMaps
+          .where('postId')
+          .equals(job.postId)
+          .and((m) => m.platform === target.platform && m.accountId === target.accountId)
+          .first();
+
+        const updates: any = {
+          status: 'DRAFT',
+          lastSyncAt: Date.now(),
+          lastError: result.error || '未能确认发布成功',
+          meta: { ...(existing?.meta || {}), currentUrl: result?.meta?.currentUrl },
+        };
+
+        if (existing) {
+          await db.platformMaps.update(existing.id, updates);
+        } else {
+          await db.platformMaps.add({
+            id: crypto.randomUUID(),
+            postId: job.postId,
+            platform: target.platform,
+            accountId: target.accountId,
+            ...updates,
           } as any);
         }
       } else {
         failCount++;
-        // 记录失败映射
-        await db.platformMaps.add({
-          id: crypto.randomUUID(),
-          postId: job.postId,
+        results.push({
           platform: target.platform,
           accountId: target.accountId,
           status: 'FAILED',
+          error: result.error || 'Unknown error',
+          updatedAt: Date.now(),
+        });
+        const existing = await db.platformMaps
+          .where('postId')
+          .equals(job.postId)
+          .and((m) => m.platform === target.platform && m.accountId === target.accountId)
+          .first();
+
+        const updates: any = {
+          status: 'FAILED',
           lastSyncAt: Date.now(),
           lastError: result.error || 'Unknown error',
-        } as any);
+        };
+
+        if (existing) {
+          await db.platformMaps.update(existing.id, updates);
+        } else {
+          await db.platformMaps.add({
+            id: crypto.randomUUID(),
+            postId: job.postId,
+            platform: target.platform,
+            accountId: target.accountId,
+            ...updates,
+          } as any);
+        }
       }
 
-      // 更新进度（结束此目标）
-      const progressEnd = Math.round(((i + 1) / job.targets.length) * 100);
-      await db.jobs.update(jobId, { progress: progressEnd, updatedAt: Date.now() });
-    }
+      completed++;
+      await updateProgress();
+    };
 
-    const allFailed = failCount === job.targets.length;
-    const finalState = allFailed ? 'FAILED' : 'DONE';
+    const queue = [...job.targets];
+    const workers = Array.from({ length: concurrency }, async () => {
+      while (queue.length > 0) {
+        const t = queue.shift();
+        if (!t) return;
+        await runTarget(t);
+      }
+    });
+
+    await updateProgress();
+    await Promise.all(workers);
+
+    const allFailed = failCount === total;
+    const allPublished = successCount === total;
+
+    // DONE: 全部发布成功 or 有成功且无待确认（允许部分失败用 job.error 表达）
+    // PAUSED: 存在待确认（需要用户在发布页手动完成/确认）
+    // FAILED: 全部失败
+    let finalState: Job['state'] = 'DONE';
+    if (allPublished) finalState = 'DONE';
+    else if (unconfirmedCount > 0) finalState = 'PAUSED';
+    else if (allFailed) finalState = 'FAILED';
+    else if (successCount === 0 && failCount > 0) finalState = 'FAILED';
+    else finalState = 'DONE';
+
+    const summaryParts: string[] = [];
+    if (successCount) summaryParts.push(`成功 ${successCount}/${total}`);
+    if (unconfirmedCount) summaryParts.push(`待确认 ${unconfirmedCount}/${total}`);
+    if (failCount) summaryParts.push(`失败 ${failCount}/${total}`);
+    const summary = summaryParts.join('，');
 
     await db.jobs.update(jobId, {
       state: finalState as any,
       progress: 100,
       updatedAt: Date.now(),
-      error: allFailed ? 'All targets failed. Check logs.' : undefined,
+      results,
+      error: finalState === 'FAILED'
+        ? (summary || '全部失败，请查看日志')
+        : unconfirmedCount > 0 || failCount > 0
+          ? summary
+          : undefined,
     });
 
-    logger.info('job', `Job completed: ${jobId} (success: ${successCount}, failed: ${failCount})`);
+    logger.info('job', `Job completed: ${jobId} (success: ${successCount}, unconfirmed: ${unconfirmedCount}, failed: ${failCount})`);
 
     // 发送通知
     try {

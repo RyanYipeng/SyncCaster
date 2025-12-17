@@ -77,7 +77,12 @@
                   <button @click="deleteJob(job.id)" class="px-3 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700">删除</button>
                 </div>
               </div>
-              <div class="text-sm" :class="isDark ? 'text-gray-400' : 'text-gray-600'">发布到 {{ job.targets?.length || 0 }} 个平台</div>
+              <div class="text-sm" :class="isDark ? 'text-gray-400' : 'text-gray-600'">
+                目标平台：{{ formatTargetPlatforms(job.targets || []) }}
+              </div>
+              <div v-if="job.results?.length" class="text-sm mt-1" :class="isDark ? 'text-gray-300' : 'text-gray-700'">
+                结果：{{ formatResults(job.results) }}
+              </div>
               <div class="text-xs mt-1" :class="isDark ? 'text-gray-500' : 'text-gray-500'">{{ formatTime(job.createdAt) }}</div>
               <div v-if="job.state === 'RUNNING'" class="mt-2">
                 <div class="w-full rounded-full h-2" :class="isDark ? 'bg-gray-600' : 'bg-gray-200'">
@@ -85,6 +90,7 @@
                 </div>
               </div>
               <div v-if="job.state === 'FAILED' && job.error" class="mt-2 p-2 rounded text-sm" :class="isDark ? 'bg-red-900/50 text-red-300' : 'bg-red-100 text-red-800'">❌ {{ job.error }}</div>
+              <div v-if="job.state === 'PAUSED' && job.error" class="mt-2 p-2 rounded text-sm" :class="isDark ? 'bg-yellow-900/40 text-yellow-200' : 'bg-yellow-100 text-yellow-900'">⏳ {{ job.error }}</div>
             </div>
           </div>
         </div>
@@ -185,15 +191,70 @@ async function deleteSelected() {
 }
 
 function getPostTitle(postId: string) { return posts.value.get(postId)?.title || '未命名文章'; }
-function getStateLabel(state: string) { return { PENDING: '待执行', RUNNING: '进行中', DONE: '已完成', FAILED: '失败' }[state] || state; }
+function getStateLabel(state: string) { return { PENDING: '待执行', RUNNING: '进行中', DONE: '已完成', FAILED: '失败', PAUSED: '待确认' }[state] || state; }
 function getJobClass(state: string, dark?: boolean) {
   if (dark) {
-    return { RUNNING: 'border-blue-500 bg-blue-900/30', DONE: 'border-green-500 bg-green-900/30', PENDING: 'border-yellow-500 bg-yellow-900/30', FAILED: 'border-red-500 bg-red-900/30' }[state] || 'border-gray-600';
+    return { RUNNING: 'border-blue-500 bg-blue-900/30', DONE: 'border-green-500 bg-green-900/30', PENDING: 'border-yellow-500 bg-yellow-900/30', FAILED: 'border-red-500 bg-red-900/30', PAUSED: 'border-yellow-500 bg-yellow-900/30' }[state] || 'border-gray-600';
   }
-  return { RUNNING: 'border-blue-500 bg-blue-50', DONE: 'border-green-500 bg-green-50', PENDING: 'border-yellow-500 bg-yellow-50', FAILED: 'border-red-500 bg-red-50' }[state] || '';
+  return { RUNNING: 'border-blue-500 bg-blue-50', DONE: 'border-green-500 bg-green-50', PENDING: 'border-yellow-500 bg-yellow-50', FAILED: 'border-red-500 bg-red-50', PAUSED: 'border-yellow-500 bg-yellow-50' }[state] || '';
 }
 function getStateClass(state: string) {
-  return { RUNNING: 'bg-blue-600 text-white', DONE: 'bg-green-600 text-white', PENDING: 'bg-yellow-600 text-white', FAILED: 'bg-red-600 text-white' }[state] || '';
+  return { RUNNING: 'bg-blue-600 text-white', DONE: 'bg-green-600 text-white', PENDING: 'bg-yellow-600 text-white', FAILED: 'bg-red-600 text-white', PAUSED: 'bg-yellow-600 text-white' }[state] || '';
+}
+
+function platformName(id: string) {
+  return ({
+    juejin: '掘金',
+    csdn: 'CSDN',
+    zhihu: '知乎',
+    wechat: '微信公众号',
+    jianshu: '简书',
+    cnblogs: '博客园',
+    '51cto': '51CTO',
+    'tencent-cloud': '腾讯云开发者社区',
+    aliyun: '阿里云开发者社区',
+    segmentfault: 'SegmentFault',
+    bilibili: 'B站专栏',
+    oschina: '开源中国',
+  } as Record<string, string>)[id] || id;
+}
+
+function formatTargetPlatforms(targets: any[]) {
+  if (!targets.length) return '无';
+  const counts = new Map<string, number>();
+  for (const t of targets) {
+    const id = t.platform;
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([id, c]) => (c > 1 ? `${platformName(id)}×${c}` : platformName(id)))
+    .join('、');
+}
+
+function formatResults(results: any[]) {
+  const icon = (status: string) =>
+    status === 'PUBLISHED' ? '✅' : status === 'FAILED' ? '❌' : '⏳';
+  const byPlatform = new Map<string, { ok: number; fail: number; pending: number }>();
+  for (const r of results) {
+    const id = r.platform;
+    if (!byPlatform.has(id)) byPlatform.set(id, { ok: 0, fail: 0, pending: 0 });
+    const cur = byPlatform.get(id)!;
+    if (r.status === 'PUBLISHED') cur.ok++;
+    else if (r.status === 'FAILED') cur.fail++;
+    else cur.pending++;
+  }
+  return Array.from(byPlatform.entries())
+    .map(([id, s]) => {
+      if (s.ok && !s.fail && !s.pending) return `${platformName(id)}${icon('PUBLISHED')}`;
+      if (s.fail && !s.ok && !s.pending) return `${platformName(id)}${icon('FAILED')}`;
+      if (s.pending && !s.ok && !s.fail) return `${platformName(id)}${icon('UNCONFIRMED')}`;
+      const parts: string[] = [];
+      if (s.ok) parts.push(`✅${s.ok}`);
+      if (s.fail) parts.push(`❌${s.fail}`);
+      if (s.pending) parts.push(`⏳${s.pending}`);
+      return `${platformName(id)}(${parts.join('/')})`;
+    })
+    .join('、');
 }
 function formatTime(ts: number) {
   const diff = Date.now() - ts;

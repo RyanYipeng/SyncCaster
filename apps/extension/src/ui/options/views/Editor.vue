@@ -19,7 +19,7 @@
           {{ sourceUrl }}
         </a>
         <button
-          @click="copyText(sourceUrl)"
+          @click="copyText(sourceUrl, '链接')"
           class="p-1 rounded hover:bg-blue-100 text-blue-600"
           title="复制链接"
         >
@@ -40,7 +40,7 @@
             placeholder="请输入标题"
           />
           <button
-            @click="copyText(title)"
+            @click="copyText(title, '标题')"
             class="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded bg-white/90 hover:bg-gray-100 border border-gray-200 text-gray-500 hover:text-gray-700 transition-all shadow-sm hover:shadow"
             title="复制标题"
           >
@@ -73,7 +73,7 @@
             placeholder="# 开始编辑..."
           ></textarea>
           <button
-            @click="copyText(body)"
+            @click="copyText(body, '正文')"
             class="absolute right-1 top-2 p-1.5 rounded bg-white/90 hover:bg-gray-100 border border-gray-200 text-gray-500 hover:text-gray-700 transition-all shadow-sm hover:shadow"
             title="复制正文"
           >
@@ -302,17 +302,25 @@
         >
           <div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[85vh] overflow-y-auto" @click.stop>
           <!-- 预览头部 -->
-          <div class="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
-            <h3 class="text-xl font-bold text-gray-800">文章预览</h3>
-            <button
-              @click="closePreview"
-              class="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors border-0 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+           <div class="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
+             <h3 class="text-xl font-bold text-gray-800">文章预览</h3>
+             <div class="flex items-center gap-2">
+               <button
+                 @click="copyPreview"
+                 class="px-3 py-1.5 rounded-md text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors border-0 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
+               >
+                 复制
+               </button>
+               <button
+                 @click="closePreview"
+                 class="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors border-0 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
+               >
+                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                 </svg>
+               </button>
+             </div>
+           </div>
 
           <!-- 预览内容 -->
           <div class="p-8">
@@ -329,10 +337,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { useMessage } from 'naive-ui';
 import { db, type Account, ChromeStorageBridge, type SyncCasterArticle, AccountStatus } from '@synccaster/core';
 import { renderMarkdownPreview } from '../utils/markdown-preview';
 
 defineProps<{ isDark?: boolean }>();
+
+const message = useMessage();
 
 const loading = ref(true);
 const notFound = ref(false);
@@ -376,13 +387,42 @@ function showCopySuccess(message: string = '已复制到剪贴板') {
 }
 
 // 复制文本到剪贴板
-async function copyText(text: string) {
+async function copyText(text: string, label: string = '内容') {
   try {
     await navigator.clipboard.writeText(text);
-    showCopySuccess('已复制到剪贴板');
+    showCopySuccess(`已复制${label}`);
   } catch {
     // Silently ignore copy errors
   }
+}
+
+function stripHtmlToText(html: string): string {
+  try {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return (div.innerText || div.textContent || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function copyPreview() {
+  const contentHtml = previewHtml.value || '';
+  const fullHtml = `<h1>${title.value || '未命名标题'}</h1>${contentHtml}`;
+  const plain = stripHtmlToText(fullHtml);
+
+  try {
+    const item = new ClipboardItem({
+      'text/html': new Blob([fullHtml], { type: 'text/html' }),
+      'text/plain': new Blob([plain], { type: 'text/plain' }),
+    });
+    await navigator.clipboard.write([item]);
+    showCopySuccess('已复制预览（保留格式）');
+    return;
+  } catch {}
+
+  // fallback: plain text
+  await copyText(plain, '预览');
 }
 
 // 预览图片
@@ -656,6 +696,23 @@ async function confirmPublish() {
         config: {},
       };
     });
+
+    const platformName = (id: string) => ({
+      juejin: '掘金',
+      csdn: 'CSDN',
+      zhihu: '知乎',
+      wechat: '微信公众号',
+      jianshu: '简书',
+      cnblogs: '博客园',
+      '51cto': '51CTO',
+      'tencent-cloud': '腾讯云开发者社区',
+      aliyun: '阿里云开发者社区',
+      segmentfault: 'SegmentFault',
+      bilibili: 'B站专栏',
+      oschina: '开源中国',
+    } as Record<string, string>)[id] || id;
+
+    const platformListText = Array.from(new Set(targets.map(t => t.platform))).map(platformName).join('、');
     
     // 创建发布任务
     const jobId = crypto.randomUUID();
@@ -669,15 +726,15 @@ async function confirmPublish() {
       progress: 0,
       attempts: 0,
       maxAttempts: 3,
-      logs: [
-        {
-          id: crypto.randomUUID(),
-          level: 'info',
-          step: 'create',
-          message: `创建发布任务，目标平台：${targets.length} 个`,
-          timestamp: now,
-        },
-      ],
+       logs: [
+         {
+           id: crypto.randomUUID(),
+           level: 'info',
+           step: 'create',
+           message: `创建发布任务，目标平台：${platformListText || `${targets.length} 个`}`,
+           timestamp: now,
+         },
+       ],
       createdAt: now,
       updatedAt: now,
     });
@@ -691,14 +748,11 @@ async function confirmPublish() {
     // 关闭对话框
     closePublishDialog();
     
-    // 显示成功提示
-    alert(`发布任务已创建！\n将发布到 ${targets.length} 个平台\n\n您可以在"任务中心"查看进度`);
-    
-    // 跳转到任务中心
-    window.location.hash = 'tasks';
+    // 显示成功提示（不可操作、自动消失）
+    message.success(`发布任务已创建：${platformListText || `${targets.length} 个平台`}`, { duration: 1000 });
     
   } catch (error: any) {
-    alert('发布失败: ' + (error?.message || '未知错误'));
+    message.error('发布失败: ' + (error?.message || '未知错误'), { duration: 3000 });
   } finally {
     publishing.value = false;
   }

@@ -163,6 +163,14 @@ export interface Job {
   attempts: number;
   maxAttempts: number;
   logs: LogEntry[];
+  results?: Array<{
+    platform: PlatformId;
+    accountId: string;
+    status: 'PUBLISHED' | 'FAILED' | 'UNCONFIRMED';
+    url?: string;
+    error?: string;
+    updatedAt: number;
+  }>;
   createdAt: number;
   updatedAt: number;
   scheduleAt?: number;

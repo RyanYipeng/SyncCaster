@@ -18,11 +18,22 @@
     <!-- 预览内容 -->
     <div class="preview-content bg-gray-50 rounded-lg p-4 min-h-[300px]">
       <!-- 平台特定样式提示 -->
-      <div class="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
-        <strong>{{ currentPlatform?.name }}</strong> 预览
-        <span v-if="currentPlatform?.notes" class="ml-2 text-yellow-600">
-          · {{ currentPlatform.notes }}
-        </span>
+      <div class="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800 flex items-center justify-between gap-3">
+        <div>
+          <strong>{{ currentPlatform?.name }}</strong> 预览
+          <span v-if="currentPlatform?.notes" class="ml-2 text-yellow-600">
+            · {{ currentPlatform.notes }}
+          </span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span v-if="showCopyTip" class="text-xs text-yellow-700">{{ copyTipMessage }}</span>
+          <button
+            class="px-3 py-1.5 rounded-md text-sm bg-white text-yellow-900 hover:bg-yellow-100 transition-colors border border-yellow-200 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
+            @click="copyCurrentPreview"
+          >
+            复制
+          </button>
+        </div>
       </div>
 
       <!-- 微信公众号专用预览 -->
@@ -122,6 +133,8 @@ const wechatPreviewHtml = ref('');
 const wechatPreviewCss = ref('');
 const wechatMeta = ref<{ wordCount?: number; readingTime?: number } | null>(null);
 const wechatAuthor = computed(() => props.wechatOptions?.author || '');
+const showCopyTip = ref(false);
+const copyTipMessage = ref('已复制（保留格式）');
 
 // 平台配置
 const platformConfigs: Record<string, {
@@ -221,6 +234,49 @@ const previewHtml = computed(() => {
     return `<pre class="text-red-500">Markdown 解析失败</pre>`;
   }
 });
+
+function stripHtmlToText(html: string): string {
+  try {
+    const div = document.createElement('div');
+    div.innerHTML = html || '';
+    return (div.innerText || div.textContent || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function flashCopyTip(message: string) {
+  copyTipMessage.value = message;
+  showCopyTip.value = true;
+  setTimeout(() => {
+    showCopyTip.value = false;
+  }, 1000);
+}
+
+async function copyCurrentPreview() {
+  const isWechat = activePlatform.value === 'wechat';
+  const bodyHtml = isWechat ? (wechatPreviewHtml.value || '') : (previewHtml.value || '');
+  const titleHtml = `<h1>${props.title || ''}</h1>`;
+  const styleHtml = isWechat && wechatPreviewCss.value ? `<style>${wechatPreviewCss.value}</style>` : '';
+  const fullHtml = `${styleHtml}${titleHtml}${bodyHtml}`;
+  const plain = stripHtmlToText(fullHtml);
+  const platformName = currentPlatform.value?.name || '预览';
+
+  try {
+    const item = new ClipboardItem({
+      'text/html': new Blob([fullHtml], { type: 'text/html' }),
+      'text/plain': new Blob([plain], { type: 'text/plain' }),
+    });
+    await navigator.clipboard.write([item]);
+    flashCopyTip(`已复制${platformName}预览（保留格式）`);
+    return;
+  } catch {}
+
+  try {
+    await navigator.clipboard.writeText(plain);
+    flashCopyTip(`已复制${platformName}预览`);
+  } catch {}
+}
 
 // 初始化激活平台
 watch(() => props.selectedPlatforms, (newVal) => {

@@ -14,8 +14,8 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
     icons: {
       16: 'assets/icon-16.png',
       32: 'assets/icon-32.png',
-      48: 'assets/icon-48.png',
-      128: 'assets/icon-128.png',
+      48: 'assets/icon-32.png',
+      128: 'assets/icon-192.png',
     },
 
     // 弹出窗口
@@ -165,10 +165,22 @@ const manifest = {
   name: 'SyncCaster',
   version: '2.0.0',
   description: '多平台内容同步助手 - 一次编辑，处处发布',
+
+  // 图标
+  icons: {
+    16: 'assets/icon-16.png',
+    32: 'assets/icon-32.png',
+    48: 'assets/icon-32.png',
+    128: 'assets/icon-192.png',
+  },
   
   // 弹出窗口
   action: {
     default_popup: 'src/ui/popup/index.html',
+    default_icon: {
+      16: 'assets/icon-16.png',
+      32: 'assets/icon-32.png',
+    },
     default_title: 'SyncCaster',
   },
 

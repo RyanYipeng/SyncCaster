@@ -24,25 +24,77 @@ export async function waitForLoad(tabId: number, timeoutMs = 30000): Promise<voi
   });
 }
 
+type ReuseRecord = { tabId: number; createdAt: number; lastUrl?: string };
+const reuseTabs = new Map<string, ReuseRecord>();
+
+export async function getReuseTabInfo(reuseKey: string): Promise<{ tabId: number; url?: string } | null> {
+  const record = reuseTabs.get(reuseKey);
+  if (!record?.tabId) return null;
+  try {
+    const tab = await chrome.tabs.get(record.tabId);
+    return tab?.id ? { tabId: tab.id, url: tab.url } : null;
+  } catch {
+    reuseTabs.delete(reuseKey);
+    return null;
+  }
+}
+
 export async function executeInOrigin<T>(
   url: string,
   fn: (...args: any[]) => Promise<T> | T,
   args: any[] = [],
-  opts: { closeTab?: boolean; active?: boolean } = { closeTab: true, active: false }
+  opts: { closeTab?: boolean; active?: boolean; reuseKey?: string } = { closeTab: true, active: false }
 ): Promise<T> {
-  console.log('[inpage-runner] executeInOrigin', { url, active: opts.active });
+  const reuseKey = opts.reuseKey;
+  console.log('[inpage-runner] executeInOrigin', { url, active: opts.active, reuseKey });
   
   let tab: chrome.tabs.Tab | undefined;
   try {
-    tab = await chrome.tabs.create({ url, active: !!opts.active });
-    console.log('[inpage-runner] Tab created', { tabId: tab.id });
+    if (reuseKey) {
+      const record = reuseTabs.get(reuseKey);
+      if (record?.tabId) {
+        try {
+          tab = await chrome.tabs.get(record.tabId);
+        } catch {
+          reuseTabs.delete(reuseKey);
+        }
+      }
+    }
+
+    if (!tab) {
+      tab = await chrome.tabs.create({ url, active: !!opts.active });
+      console.log('[inpage-runner] Tab created', { tabId: tab.id, reuseKey });
+      if (reuseKey && tab.id) {
+        reuseTabs.set(reuseKey, { tabId: tab.id, createdAt: Date.now(), lastUrl: url });
+      }
+    } else {
+      // Reuse existing tab: ensure it is on the desired URL.
+      if (tab.id) {
+        const currentUrl = tab.url || '';
+        if (currentUrl !== url) {
+          await chrome.tabs.update(tab.id, { url });
+          if (reuseKey) {
+            const record = reuseTabs.get(reuseKey);
+            if (record) record.lastUrl = url;
+          }
+        }
+        if (opts.active) {
+          await chrome.tabs.update(tab.id, { active: true });
+        }
+      }
+    }
     
     if (!tab.id) {
       throw new Error('Failed to create tab');
     }
     
     await waitForLoad(tab.id);
-    console.log('[inpage-runner] Tab loaded, executing script');
+    console.log('[inpage-runner] Tab loaded, waiting for page to stabilize...');
+    
+    // 额外等待，确保页面 JS 完全初始化
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    console.log('[inpage-runner] Executing script');
     
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -65,11 +117,35 @@ export async function executeInOrigin<T>(
     }
     
     console.log('[inpage-runner] Raw result:', result);
+
+    // When the injected function throws, Chrome returns exceptionDetails instead of result.
+    const exceptionDetails = (result as any).exceptionDetails;
+    if (exceptionDetails) {
+      const message =
+        exceptionDetails?.exception?.description ||
+        exceptionDetails?.exception?.value ||
+        exceptionDetails?.text ||
+        'Script execution failed with exception';
+      console.error('[inpage-runner] Script exceptionDetails:', exceptionDetails);
+      throw new Error(String(message));
+    }
     
     // 检查是否有错误（某些情况下 Chrome 会返回错误信息）
     if ((result as any).error) {
       console.error('[inpage-runner] Script had error:', (result as any).error);
       throw new Error(`Script error: ${(result as any).error}`);
+    }
+
+    // 允许注入脚本将错误以结构化形式返回（用于解决 async throw 无法传回 background 的情况）
+    const returned: any = (result as any).result;
+    if (returned && typeof returned === 'object' && returned.__synccasterError) {
+      const info = returned.__synccasterError;
+      const err = new Error(String(info?.message || 'Injected script failed'));
+      if (info?.stack) {
+        (err as any).stack = String(info.stack);
+      }
+      console.error('[inpage-runner] Script returned __synccasterError:', info);
+      throw err;
     }
     
     // 允许 null 和 undefined 作为有效的返回值，但记录警告
@@ -88,8 +164,20 @@ export async function executeInOrigin<T>(
       try { 
         await chrome.tabs.remove(tab.id); 
         console.log('[inpage-runner] Tab closed', { tabId: tab.id });
+        if (reuseKey) {
+          const record = reuseTabs.get(reuseKey);
+          if (record?.tabId === tab.id) reuseTabs.delete(reuseKey);
+        }
       } catch (e) {
         console.warn('[inpage-runner] Failed to close tab', e);
+      }
+    } else if (reuseKey && tab?.id) {
+      // Keep tab open, but clean up record if the tab was closed by user.
+      try {
+        await chrome.tabs.get(tab.id);
+      } catch {
+        const record = reuseTabs.get(reuseKey);
+        if (record?.tabId === tab.id) reuseTabs.delete(reuseKey);
       }
     }
   }

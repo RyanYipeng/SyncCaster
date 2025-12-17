@@ -201,19 +201,14 @@ export const platformImageStrategies: Record<string, ImageUploadStrategy> = {
    * Bilibili columns
    */
   bilibili: {
-    mode: 'binaryUpload',
-    constraints: DEFAULT_CONSTRAINTS,
-    uploadUrl: 'https://api.bilibili.com/x/article/creative/article/upcover',
-    method: 'POST',
-    fileFieldName: 'file',
-    csrfToken: {
-      type: 'cookie',
-      name: 'bili_jct',
-      headerName: 'csrf',
+    // 专栏编辑器为 Quill 富文本，外链图片经常无法展示；使用“站内粘贴上传”生成 B 站可用 URL。
+    mode: 'domPasteUpload',
+    constraints: WEBP_CONSTRAINTS,
+    domPasteConfig: {
+      editorUrl: 'https://member.bilibili.com/platform/upload/text/edit',
+      editorSelector: '.ql-editor, .ProseMirror, [contenteditable="true"]',
+      timeoutMs: 40000,
     },
-    responseParser: (data) => ({
-      url: data.data?.url || data.url,
-    }),
   },
 
   /**
