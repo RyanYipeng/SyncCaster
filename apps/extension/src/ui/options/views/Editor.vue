@@ -1,106 +1,81 @@
 <template>
-  <div>
-    <h2 class="text-2xl font-bold mb-4" :class="isDark ? 'text-gray-100' : 'text-gray-800'">编辑文章</h2>
+  <div class="editor-page">
+    <!-- 顶部工具栏 -->
+    <div class="editor-toolbar">
+      <h2 class="editor-title" :class="isDark ? 'text-gray-100' : 'text-gray-800'">编辑文章</h2>
+      <div class="toolbar-actions">
+        <button class="btn btn-primary" @click="save">保存</button>
+        <button class="btn btn-secondary" @click="goBack">返回</button>
+        <button class="btn btn-success" @click="publish">发布</button>
+        <button class="btn btn-purple" @click="openMdEditor" title="在新标签页中打开完整的公众号编辑器">
+          🚀 打开公众号编辑器
+        </button>
+      </div>
+    </div>
 
-    <div v-if="loading" class="text-gray-500">加载中...</div>
-    <div v-else-if="notFound" class="text-red-500">未找到文章</div>
+    <div v-if="loading" class="text-gray-500 p-4">加载中...</div>
+    <div v-else-if="notFound" class="text-red-500 p-4">未找到文章</div>
 
-    <div v-else class="space-y-4">
+    <div v-else class="editor-content">
       <!-- 采集来源链接 -->
-      <div v-if="sourceUrl" class="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
-        <span class="text-blue-600">📥 采集来源：</span>
-        <a 
-          :href="sourceUrl" 
-          target="_blank" 
-          rel="noopener noreferrer"
-          class="text-blue-600 hover:text-blue-800 hover:underline truncate"
-          :title="sourceUrl"
-        >
-          {{ sourceUrl }}
-        </a>
+      <div v-if="sourceUrl" class="source-link">
+        <span class="source-icon">📥</span>
+        <span class="source-label">采集来源：</span>
+        <a :href="sourceUrl" target="_blank" rel="noopener noreferrer" class="source-url" :title="sourceUrl">{{ sourceUrl }}</a>
       </div>
 
-      <!-- 标题框 -->
-      <div class="relative">
-        <label class="block text-sm text-gray-600 mb-1">标题</label>
-        <div class="relative">
-          <input
-            v-model="title"
-            type="text"
-            class="w-full border rounded px-3 py-2 pr-12"
-            placeholder="请输入标题"
-          />
-          <button
-            @click="copyText(title, '标题')"
-            class="absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded bg-white/90 hover:bg-gray-100 border border-gray-200 text-gray-500 hover:text-gray-700 transition-all shadow-sm hover:shadow"
-            title="复制标题"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <!-- 标题输入区 -->
+      <div class="title-section">
+        <div class="title-input-wrapper">
+          <input v-model="title" type="text" class="title-input" :class="isDark ? 'dark' : ''" placeholder="请输入文章标题..." />
+          <button @click="copyText(title, '标题')" class="copy-btn" title="复制标题">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
         </div>
+        <span class="char-count">字数：{{ body.length }}</span>
       </div>
 
-      <!-- 正文框 -->
-      <div class="relative">
-        <div class="flex items-center justify-between mb-1">
-          <label class="block text-sm text-gray-600">正文</label>
-          <!-- 打开公众号编辑器按钮 -->
-          <button
-            @click="openMdEditor"
-            class="px-3 py-1 text-xs rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none"
-            title="在新标签页中打开完整的公众号编辑器"
-          >
-            🚀 打开公众号编辑器
-          </button>
+      <!-- 编辑器主体：左右分栏 -->
+      <div class="editor-main" :style="{ height: editorHeight + 'px' }">
+        <!-- 左侧：Markdown 编辑器 -->
+        <div class="editor-pane" :class="isDark ? 'dark' : ''" :style="{ width: leftPaneWidth + '%' }">
+          <div class="pane-header">
+            <span class="pane-label">Markdown 编辑</span>
+            <button @click="copyText(body, '正文')" class="copy-link">复制源码</button>
+          </div>
+          <div class="pane-body">
+            <textarea ref="editorRef" v-model="body" class="editor-textarea" :class="isDark ? 'dark' : ''" placeholder="# 开始编辑你的 Markdown 内容..." @scroll="handleEditorScroll"></textarea>
+          </div>
         </div>
-        
-        <!-- Markdown 编辑 -->
-        <div class="relative">
-          <textarea
-            v-model="body"
-            class="w-full h-80 border rounded px-3 py-2 pr-12 font-mono text-sm"
-            placeholder="# 开始编辑..."
-          ></textarea>
-          <button
-            @click="copyText(body, '正文')"
-            class="absolute right-1 top-2 p-1.5 rounded bg-white/90 hover:bg-gray-100 border border-gray-200 text-gray-500 hover:text-gray-700 transition-all shadow-sm hover:shadow"
-            title="复制正文"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
+
+        <!-- 中间分割线 - 可拖拽调整宽度 -->
+        <div class="divider" :class="[isDark ? 'dark' : '', { dragging: isResizingWidth }]" @mousedown="startResizeWidth"></div>
+
+        <!-- 右侧：实时预览区 -->
+        <div class="preview-pane" :class="isDark ? 'dark' : ''" :style="{ width: (100 - leftPaneWidth) + '%' }">
+          <div class="pane-header">
+            <span class="pane-label">实时预览</span>
+            <button @click="copyPreview" class="copy-link">复制预览</button>
+          </div>
+          <div class="pane-body" ref="previewRef" @scroll="handlePreviewScroll">
+            <div class="markdown-preview" :class="isDark ? 'dark' : ''" v-html="previewHtml"></div>
+          </div>
         </div>
       </div>
 
-      <div class="text-sm text-gray-500">
-        <span>字数：{{ body.length }}</span>
+      <!-- 底部拖拽条 - 调整高度 -->
+      <div class="height-resizer" :class="{ dragging: isResizingHeight }" @mousedown="startResizeHeight">
+        <div class="resizer-handle"></div>
       </div>
 
-      <!-- 操作按钮：移到正文下方 -->
-      <div class="flex gap-2 pt-2 border-t">
-        <button class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="save">保存</button>
-        <button class="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="goBack">返回</button>
-        <button class="px-4 py-2 rounded bg-purple-600 text-white hover:bg-purple-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="previewPost">👁️ 预览</button>
-        <button class="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 transition-colors outline-none focus:outline-none focus:ring-0 border-none" @click="publish">发布</button>
-      </div>
-
-      <!-- 图片资源：移到按钮下方 -->
-      <div v-if="images.length" class="mt-6 pt-4 border-t">
-        <div class="text-sm text-gray-600 mb-3 font-semibold">图片资源（{{ images.length }}）</div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div 
-            v-for="img in images" 
-            :key="img.id" 
-            class="border rounded p-2 bg-white hover:shadow-lg transition-shadow cursor-pointer"
-            @click="previewImage(img)"
-          >
-            <img :src="img.url" :alt="img.alt || ''" class="w-full h-28 object-cover rounded" />
-            <div class="mt-1 text-xs text-gray-500 truncate" :title="img.title || img.alt || img.url">
-              {{ img.title || img.alt || img.url }}
-            </div>
+      <!-- 图片资源 -->
+      <div v-if="images.length" class="images-section">
+        <div class="images-header">图片资源（{{ images.length }}）</div>
+        <div class="images-list">
+          <div v-for="img in images" :key="img.id" class="image-item" @click="previewImage(img)">
+            <img :src="img.url" :alt="img.alt || ''" />
           </div>
         </div>
       </div>
@@ -108,248 +83,76 @@
 
     <!-- 图片预览模态框 -->
     <Teleport to="body">
-      <transition
-        enter-active-class="transition duration-200 ease-out"
-        enter-from-class="opacity-0"
-        enter-to-class="opacity-100"
-        leave-active-class="transition duration-150 ease-in"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
-        <div
-          v-if="previewImg"
-          class="fixed inset-0 flex items-center justify-center p-4"
-          style="background-color: rgba(0, 0, 0, 0.75); z-index: 9999;"
-          @click="closeImagePreview"
-        >
-          <div class="max-w-4xl max-h-full">
-            <img :src="previewImg.url" :alt="previewImg.alt || ''" class="max-w-full max-h-[85vh] object-contain rounded shadow-2xl" />
-            <div v-if="previewImg.title || previewImg.alt" class="text-white text-center mt-3 font-medium">
-              {{ previewImg.title || previewImg.alt }}
-            </div>
-          </div>
+      <div v-if="previewImg" class="modal-overlay" @click="closeImagePreview">
+        <div class="image-preview-modal">
+          <img :src="previewImg.url" :alt="previewImg.alt || ''" />
+          <div v-if="previewImg.title || previewImg.alt" class="image-caption">{{ previewImg.title || previewImg.alt }}</div>
         </div>
-      </transition>
+      </div>
     </Teleport>
 
-    <!-- 复制成功提示 -->
-    <transition
-      enter-active-class="transition duration-200 ease-out"
-      enter-from-class="opacity-0 translate-y-2"
-      enter-to-class="opacity-100 translate-y-0"
-      leave-active-class="transition duration-150 ease-in"
-      leave-from-class="opacity-100 translate-y-0"
-      leave-to-class="opacity-0 translate-y-2"
-    >
-      <div
-        v-if="showCopyTip"
-        class="fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50"
-      >
-        ✓ {{ copyTipMessage }}
-      </div>
-    </transition>
-
-    <!-- 验证错误提示 -->
-    <transition
-      enter-active-class="transition duration-200 ease-out"
-      enter-from-class="opacity-0 translate-y-2"
-      enter-to-class="opacity-100 translate-y-0"
-      leave-active-class="transition duration-150 ease-in"
-      leave-from-class="opacity-100 translate-y-0"
-      leave-to-class="opacity-0 translate-y-2"
-    >
-      <div
-        v-if="showValidationTip"
-        class="fixed bottom-4 right-4 bg-orange-500 text-white px-4 py-2 rounded-lg shadow-lg z-50"
-      >
-        ⚠️ {{ validationTipMessage }}
-      </div>
-    </transition>
+    <!-- Toast 提示 -->
+    <div v-if="showCopyTip" class="toast toast-success">✓ {{ copyTipMessage }}</div>
+    <div v-if="showValidationTip" class="toast toast-warning">⚠️ {{ validationTipMessage }}</div>
 
     <!-- 发布对话框 -->
     <Teleport to="body">
-      <transition
-        enter-active-class="transition duration-200 ease-out"
-        enter-from-class="opacity-0"
-        enter-to-class="opacity-100"
-        leave-active-class="transition duration-150 ease-in"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
-        <div
-          v-if="showPublishDialog"
-          class="fixed inset-0 flex items-center justify-center p-4"
-          style="background-color: rgba(0, 0, 0, 0.5); z-index: 9999;"
-          @click.self="closePublishDialog"
-        >
-          <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto" @click.stop>
-          <!-- 对话框头部 -->
-          <div class="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
-            <h3 class="text-xl font-bold text-gray-800">发布文章</h3>
-            <button
-              @click="closePublishDialog"
-              class="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors border-0 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+      <div v-if="showPublishDialog" class="modal-overlay" @click.self="closePublishDialog">
+        <div class="publish-dialog" @click.stop>
+          <div class="dialog-header">
+            <h3>发布文章</h3>
+            <button @click="closePublishDialog" class="close-btn">×</button>
           </div>
-
-          <!-- 对话框内容 -->
-          <div class="p-6 space-y-4">
-            <!-- 文章信息 -->
-            <div class="bg-gray-50 rounded-lg p-4">
-              <div class="text-sm text-gray-600 mb-1">文章标题</div>
-              <div class="font-semibold text-gray-800">{{ title || '未命名' }}</div>
-              <div class="text-sm text-gray-500 mt-2">字数：{{ body.length }}</div>
+          <div class="dialog-body">
+            <div class="article-info">
+              <div class="info-label">文章标题</div>
+              <div class="info-value">{{ title || '未命名' }}</div>
+              <div class="info-meta">字数：{{ body.length }}</div>
             </div>
-
-            <!-- 平台选择 -->
-            <div>
-              <div class="flex items-center justify-between mb-3">
-                <label class="text-sm font-semibold text-gray-700">选择发布平台</label>
-                <button
-                  @click="toggleSelectAll"
-                  class="text-sm text-blue-600 hover:text-blue-700 transition-colors"
-                >
-                  {{ allSelected ? '取消全选' : '全选' }}
-                </button>
+            <div class="platform-section">
+              <div class="platform-header">
+                <span>选择发布平台</span>
+                <button @click="toggleSelectAll" class="select-all-btn">{{ allSelected ? '取消全选' : '全选' }}</button>
               </div>
-
-              <!-- 已登录账号列表 -->
-              <div v-if="enabledAccounts.length > 0" class="space-y-2">
-                <div
-                  v-for="account in enabledAccounts"
-                  :key="account.id"
-                  class="flex items-center gap-3 p-3 border rounded-lg transition-colors"
-                  :class="[
-                    isAccountDisabled(account) 
-                      ? 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-60' 
-                      : selectedAccounts.includes(account.id) 
-                        ? 'border-blue-500 bg-blue-50 cursor-pointer hover:bg-blue-100' 
-                        : 'border-gray-200 cursor-pointer hover:bg-gray-50'
-                  ]"
-                  @click="!isAccountDisabled(account) && toggleAccount(account.id)"
-                >
-                  <input
-                    type="checkbox"
-                    :checked="selectedAccounts.includes(account.id)"
-                    :disabled="isAccountDisabled(account)"
-                    class="w-4 h-4 text-blue-600 rounded disabled:cursor-not-allowed"
-                    @click.stop="!isAccountDisabled(account) && toggleAccount(account.id)"
-                  />
-                  <img
-                    v-if="account.avatar"
-                    :src="account.avatar"
-                    :alt="account.nickname"
-                    class="w-8 h-8 rounded-full"
-                  />
-                  <div class="flex-1 min-w-0">
-                    <div class="font-medium text-gray-800">{{ account.nickname }}</div>
-                    <div class="flex items-center gap-2">
-                      <span class="text-xs text-gray-500">{{ getPlatformName(account.platform) }}</span>
-                      <!-- 状态标签：与账号管理保持一致 -->
-                      <span 
-                        v-if="account.status === 'expired'" 
-                        class="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-600"
-                        :title="account.lastError || '账号登录已失效，请重新登录'"
-                      >已失效</span>
-                      <span 
-                        v-else-if="account.status === 'error'" 
-                        class="text-xs px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-600"
-                        :title="account.lastError || '检测异常，可能是临时问题'"
-                      >检测异常</span>
+              <div v-if="enabledAccounts.length > 0" class="account-list">
+                <div v-for="account in enabledAccounts" :key="account.id" class="account-item" :class="{ selected: selectedAccounts.includes(account.id), disabled: isAccountDisabled(account) }" @click="!isAccountDisabled(account) && toggleAccount(account.id)">
+                  <input type="checkbox" :checked="selectedAccounts.includes(account.id)" :disabled="isAccountDisabled(account)" />
+                  <img v-if="account.avatar" :src="account.avatar" :alt="account.nickname" class="avatar" />
+                  <div class="account-info">
+                    <div class="nickname">{{ account.nickname }}</div>
+                    <div class="platform">
+                      {{ getPlatformName(account.platform) }}
+                      <span v-if="account.status === 'expired'" class="status-tag expired">已失效</span>
+                      <span v-else-if="account.status === 'error'" class="status-tag error">检测异常</span>
                     </div>
                   </div>
                 </div>
               </div>
-
-              <!-- 无可用账号提示 -->
-              <div v-else class="text-center py-8 text-gray-500">
-                <div class="text-4xl mb-2">📭</div>
+              <div v-else class="no-accounts">
+                <div>📭</div>
                 <div>暂无已登录的账号</div>
-                <button
-                  @click="goToAccounts"
-                  class="mt-3 text-blue-600 hover:text-blue-700 text-sm"
-                >
-                  前往添加账号 →
-                </button>
+                <button @click="goToAccounts">前往添加账号 →</button>
               </div>
             </div>
           </div>
-
-          <!-- 对话框底部 -->
-          <div class="sticky bottom-0 bg-white border-t border-gray-200 px-6 py-4 flex gap-3 rounded-b-2xl">
-            <button
-              @click="confirmPublish"
-              class="flex-1 px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-              :disabled="selectedAccounts.length === 0 || publishing"
-            >
+          <div class="dialog-footer">
+            <button @click="confirmPublish" class="publish-btn" :disabled="selectedAccounts.length === 0 || publishing">
               {{ publishing ? '发布中...' : `发布到 ${selectedAccounts.length} 个平台` }}
             </button>
           </div>
         </div>
       </div>
-    </transition>
-    </Teleport>
-
-    <!-- 预览对话框 -->
-    <Teleport to="body">
-      <transition
-        enter-active-class="transition duration-200 ease-out"
-        enter-from-class="opacity-0"
-        enter-to-class="opacity-100"
-        leave-active-class="transition duration-150 ease-in"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
-        <div
-          v-if="showPreview"
-          class="fixed inset-0 flex items-center justify-center p-4"
-          style="background-color: rgba(0, 0, 0, 0.5); z-index: 9999;"
-          @click.self="closePreview"
-        >
-          <div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[85vh] overflow-y-auto" @click.stop>
-          <!-- 预览头部 -->
-           <div class="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
-             <h3 class="text-xl font-bold text-gray-800">文章预览</h3>
-             <div class="flex items-center gap-2">
-               <button
-                 @click="copyPreview"
-                 class="px-3 py-1.5 rounded-md text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors border-0 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
-               >
-                 复制
-               </button>
-               <button
-                 @click="closePreview"
-                 class="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors border-0 outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
-               >
-                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                 </svg>
-               </button>
-             </div>
-           </div>
-
-          <!-- 预览内容 -->
-          <div class="p-8">
-            <h1 class="text-3xl font-bold text-gray-900 mb-4">{{ title || '未命名标题' }}</h1>
-            <div class="text-sm text-gray-500 mb-6">字数：{{ body.length }} · 图片：{{ images.length }}</div>
-            <div class="markdown-preview" v-html="previewHtml"></div>
-          </div>
-        </div>
-      </div>
-    </transition>
     </Teleport>
   </div>
 </template>
+
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useMessage } from 'naive-ui';
 import { db, type Account, ChromeStorageBridge, type SyncCasterArticle, AccountStatus } from '@synccaster/core';
 import { renderMarkdownPreview } from '../utils/markdown-preview';
+import '../markdown-preview.css';
 
 defineProps<{ isDark?: boolean }>();
 
@@ -366,100 +169,151 @@ const previewImg = ref<any>(null);
 const showCopyTip = ref(false);
 const copyTipMessage = ref('已复制到剪贴板');
 const showPublishDialog = ref(false);
-const showPreview = ref(false);
 const publishing = ref(false);
 const enabledAccounts = ref<Account[]>([]);
 const selectedAccounts = ref<string[]>([]);
 
-// 判断账号是否不可用（与账号管理状态同步）
+const editorRef = ref<HTMLTextAreaElement | null>(null);
+const previewRef = ref<HTMLDivElement | null>(null);
+
+// 可调整的尺寸
+const editorHeight = ref(420);
+const leftPaneWidth = ref(50);
+const isResizingHeight = ref(false);
+const isResizingWidth = ref(false);
+
+// 高度拖拽
+function startResizeHeight(e: MouseEvent) {
+  e.preventDefault();
+  isResizingHeight.value = true;
+  const startY = e.clientY;
+  const startHeight = editorHeight.value;
+  
+  const onMove = (ev: MouseEvent) => {
+    const delta = ev.clientY - startY;
+    editorHeight.value = Math.max(200, Math.min(700, startHeight + delta));
+  };
+  
+  const onUp = () => {
+    isResizingHeight.value = false;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// 宽度拖拽
+function startResizeWidth(e: MouseEvent) {
+  e.preventDefault();
+  isResizingWidth.value = true;
+  const startX = e.clientX;
+  const startWidth = leftPaneWidth.value;
+  const container = (e.target as HTMLElement).parentElement;
+  const containerWidth = container?.offsetWidth || 800;
+  
+  const onMove = (ev: MouseEvent) => {
+    const delta = ev.clientX - startX;
+    const deltaPercent = (delta / containerWidth) * 100;
+    leftPaneWidth.value = Math.max(25, Math.min(75, startWidth + deltaPercent));
+  };
+  
+  const onUp = () => {
+    isResizingWidth.value = false;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// 滚动同步
+let syncSource: 'editor' | 'preview' | null = null;
+let rafId: number | null = null;
+
+function handleEditorScroll() {
+  if (syncSource === 'preview') return;
+  syncSource = 'editor';
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(() => {
+    const editor = editorRef.value;
+    const preview = previewRef.value;
+    if (!editor || !preview) return;
+    const editorMax = editor.scrollHeight - editor.clientHeight;
+    const previewMax = preview.scrollHeight - preview.clientHeight;
+    if (editorMax <= 0 || previewMax <= 0) return;
+    preview.scrollTop = (editor.scrollTop / editorMax) * previewMax;
+    setTimeout(() => { syncSource = null; }, 50);
+  });
+}
+
+function handlePreviewScroll() {
+  if (syncSource === 'editor') return;
+  syncSource = 'preview';
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(() => {
+    const editor = editorRef.value;
+    const preview = previewRef.value;
+    if (!editor || !preview) return;
+    const editorMax = editor.scrollHeight - editor.clientHeight;
+    const previewMax = preview.scrollHeight - preview.clientHeight;
+    if (editorMax <= 0 || previewMax <= 0) return;
+    editor.scrollTop = (preview.scrollTop / previewMax) * editorMax;
+    setTimeout(() => { syncSource = null; }, 50);
+  });
+}
+
 function isAccountDisabled(account: Account): boolean {
   return account.status === AccountStatus.EXPIRED || account.status === AccountStatus.ERROR;
 }
 
-// 获取可用账号列表（排除 expired 和 error 状态）
-const availableAccounts = computed(() => {
-  return enabledAccounts.value.filter(account => !isAccountDisabled(account));
-});
-
-// 计算是否全选（只计算可用账号）
+const availableAccounts = computed(() => enabledAccounts.value.filter(a => !isAccountDisabled(a)));
 const allSelected = computed(() => {
   const available = availableAccounts.value;
-  return available.length > 0 && 
-         available.every(a => selectedAccounts.value.includes(a.id));
+  return available.length > 0 && available.every(a => selectedAccounts.value.includes(a.id));
 });
 
-// 预览 HTML
 const previewHtml = computed(() => {
-  if (!body.value) return '<p class="text-gray-400">暂无内容</p>';
-  try {
-    return renderMarkdownPreview(body.value);
-  } catch {
-    return `<pre class="text-red-500">Markdown 解析失败</pre>`;
-  }
+  if (!body.value) return '<p class="empty-hint">暂无内容</p>';
+  try { return renderMarkdownPreview(body.value); }
+  catch { return '<pre class="error-hint">Markdown 解析失败</pre>'; }
 });
 
-// 显示复制提示
-function showCopySuccess(message: string = '已复制到剪贴板') {
-  copyTipMessage.value = message;
+function showCopySuccess(msg: string = '已复制到剪贴板') {
+  copyTipMessage.value = msg;
   showCopyTip.value = true;
-  setTimeout(() => {
-    showCopyTip.value = false;
-  }, 2000);
+  setTimeout(() => { showCopyTip.value = false; }, 2000);
 }
 
-// 复制文本到剪贴板
 async function copyText(text: string, label: string = '内容') {
-  try {
-    await navigator.clipboard.writeText(text);
-    showCopySuccess(`已复制${label}`);
-  } catch {
-    // Silently ignore copy errors
-  }
+  try { await navigator.clipboard.writeText(text); showCopySuccess(`已复制${label}`); } catch {}
 }
 
 function stripHtmlToText(html: string): string {
-  try {
-    const div = document.createElement('div');
-    div.innerHTML = html;
-    return (div.innerText || div.textContent || '').trim();
-  } catch {
-    return '';
-  }
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  return (div.innerText || div.textContent || '').trim();
 }
 
 async function copyPreview() {
   const contentHtml = previewHtml.value || '';
   const fullHtml = `<h1>${title.value || '未命名标题'}</h1>${contentHtml}`;
   const plain = stripHtmlToText(fullHtml);
-
   try {
-    const item = new ClipboardItem({
+    await navigator.clipboard.write([new ClipboardItem({
       'text/html': new Blob([fullHtml], { type: 'text/html' }),
       'text/plain': new Blob([plain], { type: 'text/plain' }),
-    });
-    await navigator.clipboard.write([item]);
-    showCopySuccess('已复制预览内容');
-    return;
-  } catch {}
-
-  // fallback: plain text
-  try {
-    await navigator.clipboard.writeText(plain);
+    })]);
     showCopySuccess('已复制预览内容');
   } catch {
-    // Silently ignore copy errors
+    try { await navigator.clipboard.writeText(plain); showCopySuccess('已复制预览内容'); } catch {}
   }
 }
 
-// 预览图片
-function previewImage(img: any) {
-  previewImg.value = img;
-}
-
-// 关闭图片预览
-function closeImagePreview() {
-  previewImg.value = null;
-}
+function previewImage(img: any) { previewImg.value = img; }
+function closeImagePreview() { previewImg.value = null; }
 
 function parseIdFromHash() {
   const raw = window.location.hash.slice(1);
@@ -473,387 +327,264 @@ async function load() {
   try {
     const pid = parseIdFromHash();
     id.value = pid;
-
-    if (pid === 'new' || !pid) {
-      title.value = '';
-      body.value = '';
-      sourceUrl.value = '';
-      loading.value = false;
-      return;
-    }
-
+    if (pid === 'new' || !pid) { title.value = ''; body.value = ''; sourceUrl.value = ''; loading.value = false; return; }
     const post = await db.posts.get(pid);
-    if (!post) {
-      notFound.value = true;
-      return;
-    }
+    if (!post) { notFound.value = true; return; }
     title.value = post.title || '';
     body.value = post.body_md || '';
     sourceUrl.value = post.url || post.canonicalUrl || '';
     images.value = Array.isArray(post.assets) ? post.assets.filter((a: any) => a.type === 'image') : [];
-  } finally {
-    loading.value = false;
-  }
+  } finally { loading.value = false; }
 }
 
-// 保存验证提示
 const showValidationTip = ref(false);
 const validationTipMessage = ref('');
 
-function showValidationError(message: string) {
-  validationTipMessage.value = message;
+function showValidationError(msg: string) {
+  validationTipMessage.value = msg;
   showValidationTip.value = true;
-  setTimeout(() => {
-    showValidationTip.value = false;
-  }, 2000);
+  setTimeout(() => { showValidationTip.value = false; }, 2000);
 }
 
 async function save() {
-  // 验证标题和正文
-  if (!title.value.trim()) {
-    showValidationError('请输入文章标题');
-    return;
-  }
-  if (!body.value.trim()) {
-    showValidationError('请输入文章正文');
-    return;
-  }
-
+  if (!title.value.trim()) { showValidationError('请输入文章标题'); return; }
+  if (!body.value.trim()) { showValidationError('请输入文章正文'); return; }
   if (!id.value || id.value === 'new') {
     const now = Date.now();
-    const newId = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
-      ? crypto.randomUUID()
-      : `${now}-${Math.random().toString(36).slice(2, 8)}`;
-    await db.posts.add({
-      id: newId,
-      version: 1,
-      title: title.value,
-      summary: (body.value || '').slice(0, 200),
-      canonicalUrl: '',
-      createdAt: now,
-      updatedAt: now,
-      body_md: body.value,
-      tags: [],
-      categories: [],
-      assets: [],
-      meta: {},
-    } as any);
+    const newId = crypto.randomUUID?.() || `${now}-${Math.random().toString(36).slice(2, 8)}`;
+    await db.posts.add({ id: newId, version: 1, title: title.value, summary: body.value.slice(0, 200), canonicalUrl: '', createdAt: now, updatedAt: now, body_md: body.value, tags: [], categories: [], assets: [], meta: {} } as any);
     window.location.hash = `editor/${newId}`;
     showCopySuccess('文章已保存');
     return;
   }
-  await db.posts.update(id.value, {
-    title: title.value,
-    body_md: body.value,
-    summary: (body.value || '').slice(0, 200),
-    updatedAt: Date.now(),
-  } as any);
+  await db.posts.update(id.value, { title: title.value, body_md: body.value, summary: body.value.slice(0, 200), updatedAt: Date.now() } as any);
   showCopySuccess('文章已保存');
 }
 
-function goBack() {
-  window.location.hash = 'posts';
-}
+function goBack() { window.location.hash = 'posts'; }
 
-// 加载已启用的账号
 async function loadEnabledAccounts() {
-  try {
-    const allAccounts = await db.accounts.toArray();
-    enabledAccounts.value = allAccounts.filter(account => account.enabled === true);
-  } catch {
-    enabledAccounts.value = [];
-  }
+  try { const all = await db.accounts.toArray(); enabledAccounts.value = all.filter(a => a.enabled === true); }
+  catch { enabledAccounts.value = []; }
 }
 
-// 获取平台名称（全部12个平台）
 function getPlatformName(platform: string): string {
-  const names: Record<string, string> = {
-    wechat: '微信公众号',
-    zhihu: '知乎',
-    juejin: '掘金',
-    csdn: 'CSDN',
-    jianshu: '简书',
-    cnblogs: '博客园',
-    '51cto': '51CTO',
-    'tencent-cloud': '腾讯云开发者社区',
-    aliyun: '阿里云开发者社区',
-    segmentfault: '思否',
-    bilibili: 'B站专栏',
-    oschina: '开源中国',
-  };
+  const names: Record<string, string> = { wechat: '微信公众号', zhihu: '知乎', juejin: '掘金', csdn: 'CSDN', jianshu: '简书', cnblogs: '博客园', '51cto': '51CTO', 'tencent-cloud': '腾讯云', aliyun: '阿里云', segmentfault: '思否', bilibili: 'B站专栏', oschina: '开源中国' };
   return names[platform] || platform;
 }
 
-// 获取平台图标（全部12个平台）
-function getPlatformIcon(platform: string): string {
-  const icons: Record<string, string> = {
-    wechat: '💚',
-    zhihu: '🔵',
-    juejin: '🔷',
-    csdn: '📘',
-    jianshu: '📝',
-    cnblogs: '🌿',
-    '51cto': '🔶',
-    'tencent-cloud': '☁️',
-    aliyun: '🧡',
-    segmentfault: '🟢',
-    bilibili: '📺',
-    oschina: '🔴',
-  };
-  return icons[platform] || '📄';
-}
-
-// 切换账号选择（仅可用账号可操作）
 function toggleAccount(accountId: string) {
-  const account = enabledAccounts.value.find(a => a.id === accountId);
-  if (account && isAccountDisabled(account)) {
-    return; // 不可用账号不允许选择
-  }
-  
-  const index = selectedAccounts.value.indexOf(accountId);
-  if (index > -1) {
-    selectedAccounts.value.splice(index, 1);
-  } else {
-    selectedAccounts.value.push(accountId);
-  }
+  const idx = selectedAccounts.value.indexOf(accountId);
+  if (idx > -1) selectedAccounts.value.splice(idx, 1);
+  else selectedAccounts.value.push(accountId);
 }
 
-// 全选/取消全选（仅操作可用账号）
 function toggleSelectAll() {
   const available = availableAccounts.value;
-  if (allSelected.value) {
-    // 取消全选：移除所有可用账号
-    selectedAccounts.value = selectedAccounts.value.filter(
-      id => !available.some(a => a.id === id)
-    );
-  } else {
-    // 全选：添加所有可用账号
-    const availableIds = available.map(a => a.id);
-    const currentIds = new Set(selectedAccounts.value);
-    availableIds.forEach(id => currentIds.add(id));
-    selectedAccounts.value = Array.from(currentIds);
-  }
+  if (allSelected.value) { selectedAccounts.value = selectedAccounts.value.filter(id => !available.some(a => a.id === id)); }
+  else { const ids = new Set(selectedAccounts.value); available.forEach(a => ids.add(a.id)); selectedAccounts.value = Array.from(ids); }
 }
 
-// 打开发布对话框
 async function publish() {
-  // 确保文章已保存
-  if (!id.value || id.value === 'new') {
-    alert('请先保存文章');
-    await save();
-    if (!id.value || id.value === 'new') return;
-  }
-  
-  // 加载账号
+  if (!id.value || id.value === 'new') { await save(); if (!id.value || id.value === 'new') return; }
   await loadEnabledAccounts();
-  
-  // 重置选择
   selectedAccounts.value = [];
-  
-  // 显示对话框
   showPublishDialog.value = true;
 }
 
-// 关闭发布对话框
-function closePublishDialog() {
-  showPublishDialog.value = false;
-  selectedAccounts.value = [];
-}
+function closePublishDialog() { showPublishDialog.value = false; selectedAccounts.value = []; }
+function goToAccounts() { window.location.hash = 'accounts'; }
 
-// 预览文章
-function previewPost() {
-  showPreview.value = true;
-}
-
-// 关闭预览
-function closePreview() {
-  showPreview.value = false;
-}
-
-// 前往账号管理
-function goToAccounts() {
-  window.location.hash = 'accounts';
-}
-
-// 打开公众号编辑器（md-editor）
 async function openMdEditor() {
-  // 确保文章已保存
-  if (!id.value || id.value === 'new') {
-    await save();
-    if (!id.value || id.value === 'new') {
-      alert('请先保存文章');
-      return;
-    }
-  }
-  
+  if (!id.value || id.value === 'new') { await save(); if (!id.value || id.value === 'new') { alert('请先保存文章'); return; } }
   try {
-    // 构建 SyncCasterArticle 数据
-    const article: SyncCasterArticle = {
-      id: id.value,
-      title: title.value || '未命名标题',
-      content: body.value || '',
-      sourceUrl: sourceUrl.value || undefined,
-      updatedAt: Date.now(),
-    };
-    
-    // 保存到 Chrome Storage
-    await ChromeStorageBridge.saveArticle(article);
-    
-    // 获取扩展的 md-editor.html URL（位于 public/md-editor/ 目录下）
-    const mdEditorUrl = chrome.runtime.getURL('md-editor/md-editor.html');
-    
-    // 在新标签页中打开
-    chrome.tabs.create({ url: mdEditorUrl });
-    
-  } catch (error: any) {
-    alert('打开公众号编辑器失败: ' + (error?.message || '未知错误'));
-  }
+    await ChromeStorageBridge.saveArticle({ id: id.value, title: title.value || '未命名标题', content: body.value || '', sourceUrl: sourceUrl.value || undefined, updatedAt: Date.now() });
+    chrome.tabs.create({ url: chrome.runtime.getURL('md-editor/md-editor.html') });
+  } catch (e: any) { alert('打开公众号编辑器失败: ' + (e?.message || '未知错误')); }
 }
 
-// 确认发布
 async function confirmPublish() {
-  if (selectedAccounts.value.length === 0) {
-    alert('请选择至少一个发布平台');
-    return;
-  }
-  
+  if (selectedAccounts.value.length === 0) { alert('请选择至少一个发布平台'); return; }
   publishing.value = true;
-  
   try {
-    // 获取文章数据
     const post = await db.posts.get(id.value);
-    if (!post) {
-      throw new Error('文章不存在');
-    }
-    
-    // 构建发布目标
+    if (!post) throw new Error('文章不存在');
     const targets = selectedAccounts.value.map(accountId => {
       const account = enabledAccounts.value.find(a => a.id === accountId);
-      return {
-        platform: account!.platform,
-        accountId: accountId,
-        config: {},
-      };
+      return { platform: account!.platform, accountId, config: {} };
     });
-
-    const platformName = (id: string) => ({
-      juejin: '掘金',
-      csdn: 'CSDN',
-      zhihu: '知乎',
-      wechat: '微信公众号',
-      jianshu: '简书',
-      cnblogs: '博客园',
-      '51cto': '51CTO',
-      'tencent-cloud': '腾讯云开发者社区',
-      aliyun: '阿里云开发者社区',
-      segmentfault: 'SegmentFault',
-      bilibili: 'B站专栏',
-      oschina: '开源中国',
-    } as Record<string, string>)[id] || id;
-
+    const platformName = (p: string) => ({ juejin: '掘金', csdn: 'CSDN', zhihu: '知乎', wechat: '微信公众号', jianshu: '简书', cnblogs: '博客园', '51cto': '51CTO', 'tencent-cloud': '腾讯云', aliyun: '阿里云', segmentfault: 'SegmentFault', bilibili: 'B站专栏', oschina: '开源中国' } as Record<string, string>)[p] || p;
     const platformListText = Array.from(new Set(targets.map(t => t.platform))).map(platformName).join('、');
-    
-    // 创建发布任务
     const jobId = crypto.randomUUID();
     const now = Date.now();
-    
-    await db.jobs.add({
-      id: jobId,
-      postId: id.value,
-      targets: targets,
-      state: 'PENDING',
-      progress: 0,
-      attempts: 0,
-      maxAttempts: 3,
-       logs: [
-         {
-           id: crypto.randomUUID(),
-           level: 'info',
-           step: 'create',
-           message: `创建发布任务，目标平台：${platformListText || `${targets.length} 个`}`,
-           timestamp: now,
-         },
-       ],
-      createdAt: now,
-      updatedAt: now,
-    });
-    
-    // 通知后台开始执行任务
-    chrome.runtime.sendMessage({
-      type: 'START_PUBLISH_JOB',
-      data: { jobId },
-    });
-    
-    // 关闭对话框
+    await db.jobs.add({ id: jobId, postId: id.value, targets, state: 'PENDING', progress: 0, attempts: 0, maxAttempts: 3, logs: [{ id: crypto.randomUUID(), level: 'info', step: 'create', message: `创建发布任务，目标平台：${platformListText}`, timestamp: now }], createdAt: now, updatedAt: now });
+    chrome.runtime.sendMessage({ type: 'START_PUBLISH_JOB', data: { jobId } });
     closePublishDialog();
-    
-    // 显示成功提示（不可操作、自动消失）
-    message.success(`发布任务已创建：${platformListText || `${targets.length} 个平台`}`, { duration: 1000 });
-    
-  } catch (error: any) {
-    message.error('发布失败: ' + (error?.message || '未知错误'), { duration: 3000 });
-  } finally {
-    publishing.value = false;
-  }
+    message.success(`发布任务已创建：${platformListText}`, { duration: 1000 });
+  } catch (e: any) { message.error('发布失败: ' + (e?.message || '未知错误'), { duration: 3000 }); }
+  finally { publishing.value = false; }
 }
 
-// 从 Chrome Storage 同步内容（当从 md-editor 返回时）
 async function syncFromStorage() {
   if (!id.value || id.value === 'new') return;
-  
   try {
     const article = await ChromeStorageBridge.loadArticle();
-    if (article && article.id === id.value) {
-      // 检查是否有更新
-      if (article.content !== body.value || article.title !== title.value) {
-        title.value = article.title;
-        body.value = article.content;
-      }
+    if (article && article.id === id.value && (article.content !== body.value || article.title !== title.value)) {
+      title.value = article.title;
+      body.value = article.content;
     }
-  } catch {
-    // Silently ignore sync errors
-  }
+  } catch {}
 }
 
-// 监听页面可见性变化（当用户从 md-editor 返回时）
-function handleVisibilityChange() {
-  if (document.visibilityState === 'visible') {
-    syncFromStorage();
-  }
-}
+function handleVisibilityChange() { if (document.visibilityState === 'visible') syncFromStorage(); }
 
-// 监听 Chrome Storage 变化
 let unsubscribeStorageChange: (() => void) | null = null;
 
 function setupStorageListener() {
   try {
     unsubscribeStorageChange = ChromeStorageBridge.onArticleChange((article) => {
-      if (article && article.id === id.value) {
-        if (article.content !== body.value || article.title !== title.value) {
-          title.value = article.title;
-          body.value = article.content;
-        }
+      if (article && article.id === id.value && (article.content !== body.value || article.title !== title.value)) {
+        title.value = article.title;
+        body.value = article.content;
       }
     });
-  } catch {
-    // Silently ignore listener setup errors
-  }
+  } catch {}
 }
 
-onMounted(() => {
-  load();
-  document.addEventListener('visibilitychange', handleVisibilityChange);
-  setupStorageListener();
-});
-
-onUnmounted(() => {
-  document.removeEventListener('visibilitychange', handleVisibilityChange);
-  if (unsubscribeStorageChange) {
-    unsubscribeStorageChange();
-  }
-});
+onMounted(() => { load(); document.addEventListener('visibilitychange', handleVisibilityChange); setupStorageListener(); });
+onUnmounted(() => { document.removeEventListener('visibilitychange', handleVisibilityChange); if (unsubscribeStorageChange) unsubscribeStorageChange(); if (rafId) cancelAnimationFrame(rafId); });
 </script>
 
+
 <style scoped>
-/* 基础样式 */
+.editor-page { display: flex; flex-direction: column; height: auto; max-height: 100%; overflow-y: auto; }
+
+.editor-toolbar { display: flex; align-items: center; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid #e5e7eb; margin-bottom: 10px; flex-shrink: 0; }
+.editor-title { font-size: 1.15rem; font-weight: 700; margin: 0; }
+.toolbar-actions { display: flex; gap: 8px; }
+.btn { padding: 5px 12px; font-size: 13px; border-radius: 6px; border: none; cursor: pointer; transition: all 0.2s; outline: none; }
+.btn-primary { background: #3b82f6; color: white; }
+.btn-primary:hover { background: #2563eb; }
+.btn-secondary { background: #e5e7eb; color: #374151; }
+.btn-secondary:hover { background: #d1d5db; }
+.btn-success { background: #10b981; color: white; }
+.btn-success:hover { background: #059669; }
+.btn-purple { background: #8b5cf6; color: white; }
+.btn-purple:hover { background: #7c3aed; }
+
+.editor-content { display: flex; flex-direction: column; gap: 0; overflow-y: auto; }
+
+.source-link { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; font-size: 12px; margin-bottom: 10px; flex-shrink: 0; }
+.source-icon, .source-label { color: #3b82f6; }
+.source-url { color: #2563eb; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-url:hover { text-decoration: underline; }
+
+.title-section { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-shrink: 0; }
+.title-input-wrapper { position: relative; flex: 1; max-width: 600px; }
+.title-input { width: 100%; padding: 8px 36px 8px 12px; font-size: 14px; border: 1px solid #d1d5db; border-radius: 6px; outline: none; transition: border-color 0.2s, box-shadow 0.2s; background: white; }
+.title-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); }
+.title-input.dark { background: #1f2937; border-color: #4b5563; color: #f3f4f6; }
+.title-input.dark:focus { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2); }
+.copy-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); padding: 4px; background: transparent; border: none; cursor: pointer; color: #9ca3af; border-radius: 4px; transition: all 0.2s; }
+.copy-btn:hover { background: #f3f4f6; color: #6b7280; }
+.copy-btn .icon { width: 14px; height: 14px; }
+.char-count { font-size: 12px; color: #9ca3af; white-space: nowrap; }
+
+.editor-main { display: flex; gap: 0; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; background: #f9fafb; flex-shrink: 0; }
+
+.editor-pane { display: flex; flex-direction: column; min-width: 0; background: #fafbfc; }
+.editor-pane.dark { background: #111827; }
+.preview-pane { display: flex; flex-direction: column; min-width: 0; background: #ffffff; }
+.preview-pane.dark { background: #1f2937; }
+
+.pane-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid #e5e7eb; background: inherit; flex-shrink: 0; }
+.editor-pane.dark .pane-header, .preview-pane.dark .pane-header { border-bottom-color: #374151; }
+.pane-label { font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
+.copy-link { font-size: 11px; color: #3b82f6; background: none; border: none; cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: background 0.2s; }
+.copy-link:hover { background: rgba(59, 130, 246, 0.1); }
+
+.pane-body { flex: 1; overflow: auto; min-height: 0; }
+.editor-textarea { width: 100%; height: 100%; padding: 12px; font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace; font-size: 13px; line-height: 1.6; border: none; outline: none; resize: none; background: transparent; color: #1f2937; }
+.editor-textarea.dark { color: #e5e7eb; }
+.editor-textarea::placeholder { color: #9ca3af; }
+
+/* 分割线 - 可拖拽 */
+.divider { width: 6px; background: #e5e7eb; flex-shrink: 0; cursor: col-resize; position: relative; transition: background 0.2s; }
+.divider:hover, .divider.dragging { background: #3b82f6; }
+.divider.dark { background: #374151; }
+.divider.dark:hover, .divider.dark.dragging { background: #60a5fa; }
+
+/* 高度调整条 */
+.height-resizer { height: 8px; background: transparent; cursor: row-resize; display: flex; align-items: center; justify-content: center; margin: 4px 0; flex-shrink: 0; }
+.height-resizer:hover, .height-resizer.dragging { background: rgba(59, 130, 246, 0.1); }
+.resizer-handle { width: 60px; height: 4px; background: #d1d5db; border-radius: 2px; transition: background 0.2s; }
+.height-resizer:hover .resizer-handle, .height-resizer.dragging .resizer-handle { background: #3b82f6; }
+
+.markdown-preview { padding: 12px; font-size: 14px; line-height: 1.75; color: #1f2937; }
+.markdown-preview.dark { color: #e5e7eb; }
+.markdown-preview .empty-hint { color: #9ca3af; font-style: italic; }
+.markdown-preview .error-hint { color: #ef4444; }
+
+.images-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e5e7eb; flex-shrink: 0; }
+.images-header { font-size: 11px; font-weight: 600; color: #6b7280; margin-bottom: 6px; }
+.images-list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.image-item { flex-shrink: 0; width: 72px; height: 54px; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; cursor: pointer; transition: box-shadow 0.2s; }
+.image-item:hover { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+.image-item img { width: 100%; height: 100%; object-fit: cover; }
+
+.modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 20px; }
+.image-preview-modal img { max-width: 90vw; max-height: 85vh; border-radius: 8px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4); }
+.image-caption { text-align: center; color: white; margin-top: 12px; font-size: 14px; }
+
+.toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px; border-radius: 8px; font-size: 13px; z-index: 10000; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+.toast-success { background: #10b981; color: white; }
+.toast-warning { background: #f59e0b; color: white; }
+
+.publish-dialog { background: white; border-radius: 16px; width: 100%; max-width: 500px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column; }
+.dialog-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #e5e7eb; }
+.dialog-header h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.close-btn { width: 26px; height: 26px; border: none; background: #f3f4f6; border-radius: 6px; font-size: 16px; cursor: pointer; color: #6b7280; transition: all 0.2s; }
+.close-btn:hover { background: #e5e7eb; color: #374151; }
+.dialog-body { flex: 1; overflow-y: auto; padding: 16px; }
+.article-info { background: #f9fafb; border-radius: 8px; padding: 12px; margin-bottom: 14px; }
+.info-label { font-size: 11px; color: #6b7280; margin-bottom: 4px; }
+.info-value { font-size: 14px; font-weight: 600; color: #1f2937; }
+.info-meta { font-size: 11px; color: #9ca3af; margin-top: 6px; }
+.platform-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.platform-header span { font-size: 13px; font-weight: 600; color: #374151; }
+.select-all-btn { font-size: 12px; color: #3b82f6; background: none; border: none; cursor: pointer; }
+.account-list { display: flex; flex-direction: column; gap: 6px; }
+.account-item { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
+.account-item:hover { background: #f9fafb; }
+.account-item.selected { border-color: #3b82f6; background: #eff6ff; }
+.account-item.disabled { opacity: 0.5; cursor: not-allowed; }
+.account-item input[type="checkbox"] { width: 14px; height: 14px; accent-color: #3b82f6; }
+.account-item .avatar { width: 32px; height: 32px; border-radius: 50%; }
+.account-info { flex: 1; min-width: 0; }
+.nickname { font-size: 13px; font-weight: 500; color: #1f2937; }
+.platform { font-size: 11px; color: #6b7280; display: flex; align-items: center; gap: 6px; }
+.status-tag { font-size: 10px; padding: 2px 5px; border-radius: 4px; }
+.status-tag.expired { background: #fee2e2; color: #dc2626; }
+.status-tag.error { background: #fef3c7; color: #d97706; }
+.no-accounts { text-align: center; padding: 24px; color: #6b7280; }
+.no-accounts div:first-child { font-size: 28px; margin-bottom: 6px; }
+.no-accounts button { margin-top: 10px; color: #3b82f6; background: none; border: none; cursor: pointer; font-size: 12px; }
+.dialog-footer { padding: 14px 18px; border-top: 1px solid #e5e7eb; }
+.publish-btn { width: 100%; padding: 10px; font-size: 13px; font-weight: 600; background: #10b981; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+.publish-btn:hover:not(:disabled) { background: #059669; }
+.publish-btn:disabled { background: #d1d5db; cursor: not-allowed; }
+
+/* 暗色模式 */
+.markdown-preview.dark blockquote { background: #374151; border-left-color: #4b5563; color: #d1d5db; }
+.markdown-preview.dark :not(pre) > code { background: #374151; border-color: #4b5563; }
+.markdown-preview.dark pre.md-code-block { background: #1f2937 !important; border-color: #374151; }
+.markdown-preview.dark .md-table-wrap { border-color: #374151; background: #1f2937; }
+.markdown-preview.dark thead th { background: #374151; }
+.markdown-preview.dark th, .markdown-preview.dark td { border-bottom-color: #374151; }
+
+/* 滚动条 */
+.pane-body::-webkit-scrollbar, .editor-textarea::-webkit-scrollbar { width: 6px; }
+.pane-body::-webkit-scrollbar-track, .editor-textarea::-webkit-scrollbar-track { background: transparent; }
+.pane-body::-webkit-scrollbar-thumb, .editor-textarea::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+.pane-body::-webkit-scrollbar-thumb:hover, .editor-textarea::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 </style>

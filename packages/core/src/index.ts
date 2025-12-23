@@ -31,3 +31,5 @@ export * from './assets';
 export * from './platforms/configs';
 export * from './wechat';
 export * from './markdown/paste';
+// 新渲染器模块
+export * from './renderer';

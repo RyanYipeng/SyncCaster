@@ -24,21 +24,21 @@
             ? 'bg-gray-900/80 border-b border-gray-700/50' 
             : 'bg-white/80 border-b border-gray-200/50'"
         >
-          <div class="max-w-7xl mx-auto px-6 py-4">
+          <div class="max-w-7xl mx-auto px-4 py-2">
             <div class="flex items-center justify-between">
-              <div class="flex items-center gap-4 select-none">
-                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
-                  <span class="text-white text-xl">✨</span>
+              <div class="flex items-center gap-3 select-none">
+                <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center shadow-md">
+                  <span class="text-white text-base">✨</span>
                 </div>
                 <div>
-                  <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">SyncCaster</h1>
-                  <p class="text-xs" :class="isDark ? 'text-gray-400' : 'text-gray-500'">v2.0.0 · 内容采集与发布助手</p>
+                  <h1 class="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">SyncCaster</h1>
+                  <p class="text-[10px]" :class="isDark ? 'text-gray-400' : 'text-gray-500'">v2.0.0 · 内容采集与发布助手</p>
                 </div>
               </div>
-              <div class="flex items-center gap-3">
+              <div class="flex items-center gap-2">
                 <button
                   @click="toggleTheme"
-                  class="w-10 h-10 rounded-lg transition-colors flex items-center justify-center text-xl select-none border-none outline-none"
+                  class="w-8 h-8 rounded-lg transition-colors flex items-center justify-center text-base select-none border-none outline-none"
                   :class="isDark 
                     ? 'bg-gray-700 hover:bg-gray-600 text-yellow-300' 
                     : 'bg-gray-100 hover:bg-gray-200 text-gray-700'"
@@ -51,37 +51,37 @@
           </div>
         </header>
 
-        <div class="max-w-7xl mx-auto flex relative">
-          <!-- 侧边栏 -->
-          <aside class="w-64 min-h-[calc(100vh-89px)] sticky top-[89px]">
-            <nav class="p-4 space-y-1">
+        <div class="max-w-full mx-auto flex relative">
+          <!-- 侧边栏 - 收窄以释放更多编辑空间 -->
+          <aside class="w-44 min-h-[calc(100vh-57px)] sticky top-[57px] flex-shrink-0">
+            <nav class="p-2 space-y-0.5">
               <div
                 v-for="item in navItems"
                 :key="item.path"
-                class="group relative px-4 py-3 rounded-xl cursor-pointer select-none transition-all duration-300"
+                class="group relative px-3 py-2 rounded-md cursor-pointer select-none transition-all duration-300"
                 :class="currentPath === item.path 
-                  ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/30' 
+                  ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-md shadow-blue-500/25' 
                   : isDark 
                     ? 'hover:bg-gray-700/60 text-gray-300 hover:text-white' 
                     : 'hover:bg-white/60 text-gray-700 hover:text-gray-900'"
                 @click="navigate(item.path)"
               >
-                <div class="flex items-center gap-3">
-                  <span class="text-xl transition-transform group-hover:scale-110">{{ item.icon }}</span>
-                  <span class="font-medium">{{ item.label }}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-base transition-transform group-hover:scale-110">{{ item.icon }}</span>
+                  <span class="text-sm font-medium">{{ item.label }}</span>
                 </div>
                 <div 
                   v-if="currentPath === item.path"
-                  class="absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 rounded-xl blur opacity-30 -z-10"
+                  class="absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-500 rounded-md blur opacity-25 -z-10"
                 ></div>
               </div>
             </nav>
           </aside>
 
           <!-- 主内容区 -->
-          <main class="flex-1 p-6 min-h-[calc(100vh-89px)]">
+          <main class="flex-1 p-3 min-h-[calc(100vh-57px)] overflow-hidden">
             <div 
-              class="backdrop-blur-sm rounded-2xl shadow-sm p-6 transition-colors duration-300"
+              class="backdrop-blur-sm rounded-xl shadow-sm p-3 transition-colors duration-300 h-full"
               :class="isDark 
                 ? 'bg-gray-800/60 border border-gray-700' 
                 : 'bg-white/60 border border-gray-100'"
