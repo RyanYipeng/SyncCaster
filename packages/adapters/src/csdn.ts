@@ -4,9 +4,15 @@ import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
 /**
  * CSDN（新版创作中心）
  *
- * 目标：
- * - 打开编辑页后自动填充标题与正文
- * - 兼容 Markdown（CodeMirror/Monaco）与富文本（contenteditable/ProseMirror/Quill）
+ * 平台特点：
+ * - 入口：https://editor.csdn.net/md/?not_checkout=1
+ * - 编辑器：Markdown 编辑器（CodeMirror/Monaco）或富文本编辑器
+ * - 支持：Markdown 语法
+ * - 结构：标题输入框 + 正文编辑器
+ * 
+ * 发布策略：
+ * - 直接填充 Markdown 原文到编辑器
+ * - 不执行最终发布操作，由用户手动完成
  */
 export const csdnAdapter: PlatformAdapter = {
   id: 'csdn',
@@ -388,7 +394,15 @@ export const csdnAdapter: PlatformAdapter = {
           await fillRichEditor(editor, html, fallbackText);
         }
 
-        return { url: window.location.href };
+        // 内容填充完成，不执行发布操作
+        // 根据统一发布控制原则：最终发布必须由用户手动完成
+        console.log('[csdn] 内容填充完成');
+        console.log('[csdn] ⚠️ 发布操作需要用户手动完成');
+
+        return { 
+          url: window.location.href,
+          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+        };
       } catch (error: any) {
         return {
           url: window.location.href,

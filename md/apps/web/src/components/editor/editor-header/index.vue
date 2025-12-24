@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { Copy, Menu, Palette } from 'lucide-vue-next'
+import { Copy, Menu, Palette, Send } from 'lucide-vue-next'
 import { highlightPendingBlocks, hljs } from '@md/core'
 import { useEditorStore } from '@/stores/editor'
 import { useExportStore } from '@/stores/export'
+import { usePostStore } from '@/stores/post'
 import { useRenderStore } from '@/stores/render'
 import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
 import { addPrefix, generatePureHTML, processClipboardContent } from '@/utils'
 import { ensureMathJax, isExtensionEnvironment, renderPendingMathWithKaTeX } from '@/utils/mathjax-init'
 import { store } from '@/utils/storage'
+import { publishToWechat, isExtensionEnvironment as isInExtension } from '@/utils/wechat-publish'
 
 import EditDropdown from './EditDropdown.vue'
 import FileDropdown from './FileDropdown.vue'
@@ -25,11 +27,21 @@ const themeStore = useThemeStore()
 const renderStore = useRenderStore()
 const uiStore = useUIStore()
 const exportStore = useExportStore()
+const postStore = usePostStore()
 
 const { editor } = storeToRefs(editorStore)
 const { output } = storeToRefs(renderStore)
 const { primaryColor } = storeToRefs(themeStore)
 const { isOpenRightSlider } = storeToRefs(uiStore)
+const { currentPost } = storeToRefs(postStore)
+
+// 是否显示发布按钮（仅在扩展环境中显示）
+const showPublishButton = ref(false)
+const isPublishing = ref(false)
+
+onMounted(() => {
+  showPublishButton.value = isInExtension()
+})
 
 // Editor refresh function
 function editorRefresh() {
@@ -255,6 +267,42 @@ function copyToWeChat() {
   copy()
 }
 
+// 发布到微信公众号
+async function handlePublishToWechat() {
+  if (isPublishing.value) return
+  
+  isPublishing.value = true
+  
+  try {
+    // 获取当前文章标题和渲染后的 HTML 内容
+    const title = currentPost.value?.title || '未命名文章'
+    const content = output.value
+    
+    if (!content) {
+      toast.error('请先编写文章内容')
+      return
+    }
+    
+    console.log('[header] 发布到微信公众号:', { title, contentLength: content.length })
+    
+    const result = await publishToWechat({
+      title,
+      content,
+    })
+    
+    if (result.success) {
+      toast.success(result.message)
+    } else {
+      toast.error(result.message)
+    }
+  } catch (error) {
+    console.error('[header] 发布失败:', error)
+    toast.error('发布失败，请重试')
+  } finally {
+    isPublishing.value = false
+  }
+}
+
 
 </script>
 
@@ -307,6 +355,18 @@ function copyToWeChat() {
       >
         <Copy class="mr-2 h-4 w-4" />
         <span>复制</span>
+      </Button>
+
+      <!-- 发布到微信按钮（仅在扩展环境中显示） -->
+      <Button
+        v-if="showPublishButton"
+        variant="default"
+        class="h-9 bg-green-600 hover:bg-green-700"
+        :disabled="isPublishing"
+        @click="handlePublishToWechat"
+      >
+        <Send class="mr-2 h-4 w-4" />
+        <span>{{ isPublishing ? '发布中...' : '发布到微信' }}</span>
       </Button>
 
       <!-- 文章信息（移动端隐藏） -->

@@ -1,14 +1,20 @@
 import type { PlatformAdapter } from './base';
+import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
 
 /**
  * 知乎适配器
  * 
  * 平台特点：
  * - 入口：https://zhuanlan.zhihu.com/write
- * - 编辑器：富文本编辑器（不是 Markdown）
- * - 支持：HTML 内容粘贴
+ * - 编辑器：富文本编辑器，但支持 Markdown 粘贴解析
+ * - 支持：Markdown 粘贴后弹窗确认解析、HTML 内容粘贴
  * - LaTeX 公式：需通过"公式"插件输入，去除 $ 符号
  * - 结构：标题输入框 + 富文本正文
+ * 
+ * 发布策略：
+ * - 填充 Markdown 原文到编辑器
+ * - 自动点击"确认并解析"按钮完成 Markdown → 富文本转换
+ * - 不执行最终发布操作，由用户手动完成
  */
 export const zhihuAdapter: PlatformAdapter = {
   id: 'zhihu',
@@ -18,7 +24,7 @@ export const zhihuAdapter: PlatformAdapter = {
   capabilities: {
     domAutomation: true,
     supportsHtml: true,
-    supportsMarkdown: false,
+    supportsMarkdown: true, // 知乎支持 Markdown 粘贴解析
     supportsTags: true,
     supportsCategories: false,
     supportsCover: true,
@@ -35,14 +41,20 @@ export const zhihuAdapter: PlatformAdapter = {
   },
 
   async transform(post, { config }) {
-    // 知乎使用富文本编辑器，优先使用 HTML
-    const contentHtml = (post as any)?.meta?.body_html || '';
-    const contentMarkdown = post.body_md;
+    // 知乎支持 Markdown 粘贴解析：优先使用 Markdown 原文
+    // 粘贴后平台会弹出"识别到 Markdown 格式"提示，插件自动点击确认解析
+    const markdown = post.body_md || '';
+    let contentHtml = (post as any)?.meta?.body_html || '';
+    if (!contentHtml && markdown) {
+      // 备用：若 Markdown 解析失败，使用预渲染的 HTML
+      // 知乎不支持 LaTeX 渲染：去掉 $ 包裹
+      contentHtml = renderMarkdownToHtmlForPaste(markdown, { stripMath: true });
+    }
     
     return {
       title: post.title,
       contentHtml,
-      contentMarkdown,
+      contentMarkdown: markdown, // 优先使用 Markdown 原文
       cover: post.cover,
       tags: post.tags?.slice(0, 5),
       summary: post.summary,
@@ -53,7 +65,6 @@ export const zhihuAdapter: PlatformAdapter = {
   async publish(payload, ctx) {
     throw new Error('zhihu: use DOM automation');
   },
-
 
   dom: {
     matchers: [
@@ -147,11 +158,19 @@ export const zhihuAdapter: PlatformAdapter = {
         console.log('[zhihu] Title filled with input simulation:', titleText);
         await sleep(500);
 
-        // 2. 填充内容 - 知乎使用 Draft.js 富文本编辑器
-        // 使用 Clipboard API 写入剪贴板，然后模拟 Ctrl+V 粘贴
+        // 2. 填充内容 - 知乎支持 Markdown 粘贴解析
+        // 优先使用 Markdown 原文，让平台自动识别并弹出解析确认框
         console.log('[zhihu] Step 2: 填充内容');
-        const content = (payload as any).contentMarkdown || (payload as any).contentHtml || '';
-        console.log('[zhihu] Content length:', content.length);
+
+        const contentMarkdown = String((payload as any).contentMarkdown || '');
+        const contentHtml = String((payload as any).contentHtml || '');
+        
+        // 优先使用 Markdown 原文（知乎支持 Markdown 解析）
+        const useMarkdown = !!contentMarkdown;
+        const contentToFill = useMarkdown ? contentMarkdown : contentHtml;
+        
+        console.log('[zhihu] Content mode:', useMarkdown ? 'Markdown' : 'HTML');
+        console.log('[zhihu] Content length:', contentToFill.length);
         
         const editorSelectors = [
           '.public-DraftEditor-content[contenteditable="true"]',
@@ -167,14 +186,9 @@ export const zhihuAdapter: PlatformAdapter = {
         editor.focus();
         await sleep(500);
         
-        // 方法1：使用 Clipboard API 写入剪贴板，然后触发粘贴
-        console.log('[zhihu] Writing to clipboard and pasting...');
+        // 触发 paste 事件
+        console.log('[zhihu] Dispatching paste event...');
         try {
-          // 写入剪贴板
-          await navigator.clipboard.writeText(content);
-          console.log('[zhihu] Clipboard written successfully');
-          
-          // 模拟 Ctrl+V 粘贴
           editor.focus();
           await sleep(200);
           
@@ -188,24 +202,59 @@ export const zhihuAdapter: PlatformAdapter = {
           });
           editor.dispatchEvent(keydownEvent);
           
-          // 同时触发 paste 事件
-          const dt = new DataTransfer();
-          dt.setData('text/plain', content);
-          const pasteEvent = new ClipboardEvent('paste', { 
-            clipboardData: dt, 
-            bubbles: true,
-            cancelable: true,
-          });
+          // 触发 paste 事件
+          const doc = editor.ownerDocument;
+          const win = doc.defaultView || window;
+          const DT = (win as any).DataTransfer || (globalThis as any).DataTransfer;
+          const dt = new DT();
+          
+          if (useMarkdown) {
+            // Markdown 模式：只设置 text/plain，让知乎识别为 Markdown
+            dt.setData('text/plain', contentMarkdown);
+          } else {
+            // HTML 模式：设置 HTML 和纯文本
+            if (contentHtml) dt.setData('text/html', contentHtml);
+            const htmlToPlainText = (html: string) => {
+              try {
+                const div = document.createElement('div');
+                div.innerHTML = html || '';
+                return (div.innerText || div.textContent || '').trim();
+              } catch {
+                return '';
+              }
+            };
+            dt.setData('text/plain', htmlToPlainText(contentHtml));
+          }
+
+          const CE = (win as any).ClipboardEvent || (globalThis as any).ClipboardEvent;
+          const pasteEvent = new CE('paste', { bubbles: true, cancelable: true } as any);
+          Object.defineProperty(pasteEvent, 'clipboardData', { get: () => dt });
           editor.dispatchEvent(pasteEvent);
           
           console.log('[zhihu] Paste event dispatched');
         } catch (e) {
-          console.warn('[zhihu] Clipboard API failed:', e);
+          console.warn('[zhihu] Paste failed:', e);
           
           // 备用方案：使用 document.execCommand
           try {
             editor.focus();
-            document.execCommand('insertText', false, content);
+            if (useMarkdown) {
+              document.execCommand('insertText', false, contentMarkdown);
+            } else if (contentHtml) {
+              const ok = document.execCommand('insertHTML', false, contentHtml);
+              if (!ok) {
+                const htmlToPlainText = (html: string) => {
+                  try {
+                    const div = document.createElement('div');
+                    div.innerHTML = html || '';
+                    return (div.innerText || div.textContent || '').trim();
+                  } catch {
+                    return '';
+                  }
+                };
+                document.execCommand('insertText', false, htmlToPlainText(contentHtml));
+              }
+            }
           } catch (e2) {
             console.warn('[zhihu] execCommand also failed:', e2);
           }
@@ -214,100 +263,52 @@ export const zhihuAdapter: PlatformAdapter = {
         editor.dispatchEvent(new Event('input', { bubbles: true }));
         await sleep(1500);
 
-        // 3. 处理 Markdown 解析弹窗
+        // 3. 处理 Markdown 解析弹窗（仅格式解析确认，不涉及发布）
+        // 当知乎识别到 Markdown 格式时，会弹出"确认并解析"提示
         console.log('[zhihu] Step 3: 处理 Markdown 解析弹窗');
         await sleep(500);
-        
-        // 查找"确认并解析"按钮
-        for (let i = 0; i < 10; i++) {
-          const parseBtn = Array.from(document.querySelectorAll('button'))
-            .find(btn => btn.textContent?.includes('确认并解析'));
-          
+
+        // 查找并点击"确认并解析"按钮（格式解析确认）
+        for (let i = 0; i < 15; i++) {
+          const parseBtn = Array.from(document.querySelectorAll('button')).find((btn) => {
+            const text = btn.textContent || '';
+            // 匹配各种可能的解析确认按钮文案
+            return text.includes('确认并解析') || 
+                   text.includes('解析为') ||
+                   text.includes('转换为') ||
+                   (text.includes('Markdown') && text.includes('确认'));
+          });
+
           if (parseBtn) {
-            console.log('[zhihu] Found Markdown parse button, clicking...');
+            console.log('[zhihu] Found Markdown parse button:', parseBtn.textContent);
+            console.log('[zhihu] Clicking parse button (format conversion only, not publish)...');
             (parseBtn as HTMLElement).click();
             await sleep(1500);
+            console.log('[zhihu] Markdown parse completed');
             break;
           }
           await sleep(300);
         }
 
-        // 4. 点击发布按钮
-        console.log('[zhihu] Step 4: 点击发布按钮');
-        await sleep(500);
+        // 4. 内容填充完成，不执行发布操作
+        // 根据统一发布控制原则：最终发布必须由用户手动完成
+        console.log('[zhihu] Step 4: 内容填充完成');
+        console.log('[zhihu] ⚠️ 发布操作需要用户手动完成');
         
-        let publishBtn: HTMLElement | null = null;
-        
-        // 查找页面底部的"发布"按钮
-        const allButtons = Array.from(document.querySelectorAll('button'));
-        publishBtn = allButtons.find(btn => {
-          const text = btn.textContent?.trim();
-          return text === '发布' || text === '发布文章';
-        }) as HTMLElement;
-        
-        if (!publishBtn) {
-          // 尝试其他选择器
-          const publishBtnSelectors = [
-            '.PublishPanel-triggerButton',
-            '.WriteIndex-publishButton',
-            'button[type="button"]',
-          ];
-          
-          for (const selector of publishBtnSelectors) {
-            const btns = document.querySelectorAll(selector);
-            for (const btn of btns) {
-              if (btn.textContent?.includes('发布')) {
-                publishBtn = btn as HTMLElement;
-                break;
-              }
-            }
-            if (publishBtn) break;
-          }
-        }
-        
-        if (!publishBtn) throw new Error('未找到发布按钮');
-        console.log('[zhihu] Clicking publish button:', publishBtn.textContent);
-        publishBtn.click();
-        await sleep(2000);
-
-        // 5. 处理发布确认弹窗（如果有）
-        console.log('[zhihu] Step 5: 处理发布确认弹窗');
-        
-        const confirmBtns = Array.from(document.querySelectorAll('button'))
-          .filter(btn => /确认发布|立即发布|发布文章|确定/.test(btn.textContent || ''));
-        
-        if (confirmBtns.length > 0) {
-          console.log('[zhihu] Found confirm button, clicking...');
-          (confirmBtns[0] as HTMLElement).click();
-          await sleep(2000);
-        }
-
-        // 6. 等待跳转获取文章 URL
-        console.log('[zhihu] Step 6: 等待文章 URL');
-        const checkUrl = () => /zhuanlan\.zhihu\.com\/p\/\d+/.test(window.location.href);
-        
-        for (let i = 0; i < 60; i++) {
-          if (checkUrl()) {
-            console.log('[zhihu] 发布成功:', window.location.href);
-            return { url: window.location.href };
-          }
-          await sleep(500);
-        }
-
-        // 检查是否有成功提示
-        const successTip = document.querySelector('.Notification--success, [class*="success"]');
-        if (successTip) {
-          const link = document.querySelector('a[href*="/p/"]') as HTMLAnchorElement;
-          if (link) {
-            return { url: link.href };
-          }
-          return { url: 'https://zhuanlan.zhihu.com/' };
-        }
-
-        throw new Error('发布超时：未跳转到文章页');
+        // 返回当前编辑页 URL，表示内容已填充完成
+        return { 
+          url: window.location.href,
+          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+        };
       } catch (error: any) {
-        console.error('[zhihu] 发布失败:', error);
-        throw error;
+        console.error('[zhihu] 填充失败:', error);
+        return {
+          url: window.location.href,
+          __synccasterError: {
+            message: error?.message || String(error),
+            stack: error?.stack,
+          },
+        } as any;
       }
     },
   },

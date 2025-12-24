@@ -9,6 +9,7 @@ import { Logger } from '@synccaster/utils';
 import { startZhihuLearn, fetchZhihuLearnedTemplate } from './learn-recorder';
 import { AccountService } from './account-service';
 import { fetchPlatformUserInfo } from './platform-api';
+import { publishWechatFromMdEditor } from './wechat-md-publish';
 
 const logger = new Logger('background');
 
@@ -475,6 +476,14 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
       }
       
       return { received: true, saved };
+
+    case 'WECHAT_PUBLISH_FROM_MD_EDITOR':
+      // md-editor 点击「发布到微信」后触发：打开公众号发文页并自动填充标题/正文
+      logger.info('wechat', 'Publish from md-editor', {
+        title: message.data?.title,
+        contentLength: message.data?.content?.length,
+      });
+      return await publishWechatFromMdEditor(message.data);
 
     case 'START_PUBLISH_JOB':
       // 启动发布任务

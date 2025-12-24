@@ -31,11 +31,13 @@ export interface PlatformPayload {
   content?: string;
   contentHtml?: string;
   contentMarkdown?: string;
+  contentCss?: string;
   cover?: AssetRef;
   tags?: string[];
   categories?: string[];
   summary?: string;
   canonicalUrl?: string;
+  author?: string;
   meta?: Record<string, any>;
 }
 

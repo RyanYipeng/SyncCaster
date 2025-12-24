@@ -10,6 +10,10 @@ import type { PlatformAdapter } from './base';
  * - 不支持：LaTeX 公式直接识别（需通过"数学公式"按钮弹框输入）
  * - 结构：标题 + 正文
  * - 注意：LaTeX 公式需去除 $ 符号
+ * 
+ * 发布策略：
+ * - 直接填充 Markdown 原文到编辑器
+ * - 不执行最终发布操作，由用户手动完成
  */
 export const jianshuAdapter: PlatformAdapter = {
   id: 'jianshu',
@@ -122,46 +126,24 @@ export const jianshuAdapter: PlatformAdapter = {
         }
         await sleep(800);
 
-        // 4. 保存/发布
-        console.log('[jianshu] Step 4: 发布文章');
-        // 简书编辑器会自动保存，需要找发布按钮
-        const publishBtn = Array.from(document.querySelectorAll('a, button'))
-          .find(el => /发布|提交审核/.test(el.textContent || '')) as HTMLElement;
-        
-        if (publishBtn) {
-          publishBtn.click();
-          await sleep(1500);
-          
-          // 确认发布
-          const confirmBtn = Array.from(document.querySelectorAll('button'))
-            .find(btn => /确定|发布/.test(btn.textContent || '')) as HTMLElement;
-          if (confirmBtn) {
-            confirmBtn.click();
-            await sleep(2000);
-          }
-        }
+        // 4. 内容填充完成，不执行发布操作
+        // 根据统一发布控制原则：最终发布必须由用户手动完成
+        console.log('[jianshu] 内容填充完成');
+        console.log('[jianshu] ⚠️ 发布操作需要用户手动完成');
 
-        // 5. 获取文章 URL
-        console.log('[jianshu] Step 5: 获取文章 URL');
-        const checkUrl = () => /www\.jianshu\.com\/p\/[a-z0-9]+/.test(window.location.href);
-        for (let i = 0; i < 40; i++) {
-          if (checkUrl()) {
-            console.log('[jianshu] 发布成功:', window.location.href);
-            return { url: window.location.href };
-          }
-          await sleep(500);
-        }
-
-        // 简书可能不跳转，尝试从页面获取链接
-        const articleLink = document.querySelector('a[href*="/p/"]') as HTMLAnchorElement;
-        if (articleLink && /\/p\/[a-z0-9]+/.test(articleLink.href)) {
-          return { url: articleLink.href };
-        }
-
-        throw new Error('发布超时：未获得文章链接');
+        return { 
+          url: window.location.href,
+          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+        };
       } catch (error: any) {
-        console.error('[jianshu] 发布失败:', error);
-        throw error;
+        console.error('[jianshu] 填充失败:', error);
+        return {
+          url: window.location.href,
+          __synccasterError: {
+            message: error?.message || String(error),
+            stack: error?.stack,
+          },
+        } as any;
       }
     },
   },

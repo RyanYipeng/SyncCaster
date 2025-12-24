@@ -336,12 +336,12 @@ function stripHtmlToText(html: string): string {
 }
 
 async function copyPreview() {
-  const contentHtml = previewHtml.value || '';
-  const fullHtml = `<h1>${title.value || '未命名标题'}</h1>${contentHtml}`;
-  const plain = stripHtmlToText(fullHtml);
+  const container = previewRef.value?.querySelector('.markdown-preview') as HTMLElement | null;
+  const bodyHtml = container?.innerHTML ?? (previewHtml.value || '');
+  const plain = stripHtmlToText(bodyHtml);
   try {
     await navigator.clipboard.write([new ClipboardItem({
-      'text/html': new Blob([fullHtml], { type: 'text/html' }),
+      'text/html': new Blob([bodyHtml], { type: 'text/html' }),
       'text/plain': new Blob([plain], { type: 'text/plain' }),
     })]);
     showCopySuccess('已复制预览内容');
@@ -508,6 +508,22 @@ async function confirmPublish() {
     });
     const platformName = (p: string) => ({ juejin: '掘金', csdn: 'CSDN', zhihu: '知乎', wechat: '微信公众号', jianshu: '简书', cnblogs: '博客园', '51cto': '51CTO', 'tencent-cloud': '腾讯云', aliyun: '阿里云', segmentfault: 'SegmentFault', bilibili: 'B站专栏', oschina: '开源中国' } as Record<string, string>)[p] || p;
     const platformListText = Array.from(new Set(targets.map(t => t.platform))).map(platformName).join('、');
+    
+    // 检查是否包含微信公众号
+    const hasWechat = targets.some(t => t.platform === 'wechat');
+    if (hasWechat) {
+      // 微信公众号发布：内容会自动通过内置排版逻辑转换，并使用官方 API 填充到编辑器
+      // 保存文章到 Chrome Storage，供 md-editor 读取（如果用户需要手动调整排版）
+      await ChromeStorageBridge.saveArticle({ 
+        id: id.value, 
+        title: title.value || '未命名标题', 
+        content: body.value || '', 
+        sourceUrl: sourceUrl.value || undefined, 
+        updatedAt: Date.now() 
+      });
+      message.info('微信公众号：内容将自动转换为公众号格式并填充到编辑器', { duration: 3000 });
+    }
+    
     const jobId = crypto.randomUUID();
     const now = Date.now();
     await db.jobs.add({ id: jobId, postId: id.value, targets, state: 'PENDING', progress: 0, attempts: 0, maxAttempts: 3, logs: [{ id: crypto.randomUUID(), level: 'info', step: 'create', message: `创建发布任务，目标平台：${platformListText}`, timestamp: now }], createdAt: now, updatedAt: now });

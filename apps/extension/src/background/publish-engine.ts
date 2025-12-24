@@ -1,7 +1,8 @@
 ﻿import { db, type CanonicalPost, type PublishTarget, type LogEntry } from '@synccaster/core';
+import { ChromeStorageBridge } from '@synccaster/core';
 import { getAdapter } from '@synccaster/adapters';
 import { executeInOrigin, getReuseTabInfo } from './inpage-runner';
-import { ImageUploadPipeline, getImageStrategy, type ImageUploadProgress } from '@synccaster/core';
+import { ImageUploadPipeline, getImageStrategy, type ImageUploadProgress, renderMarkdownToHtmlForPaste } from '@synccaster/core';
 import type { AssetManifest } from '@synccaster/core';
 
 export interface EngineResult {
@@ -50,11 +51,6 @@ export async function appendJobLog(jobId: string, entry: Omit<LogEntry, 'id' | '
     meta: entry.meta,
   };
   await db.jobs.update(jobId, { logs: [...job.logs, log], updatedAt: Date.now() });
-}
-
-function buildWechatEditorUrl(token: string): string {
-  const timestamp = Date.now();
-  return `https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit_v2&action=edit&isNew=1&type=77&createType=0&token=${token}&lang=zh_CN&timestamp=${timestamp}`;
 }
 
 type DownloadedImage = { url: string; base64: string; mimeType: string };
@@ -124,6 +120,70 @@ export async function publishToTarget(
       ...post,
       body_md: normalizeMarkdownImageUrls(post.body_md || ''),
     };
+
+    // ================================
+    // 微信公众号：两阶段发布流程（先进入 MD 编辑器预览）
+    // ================================
+    // 1) 用户在 SyncCaster 中点击发布
+    // 2) 打开内置微信 Markdown 编辑器（md-editor）进行预览排版
+    // 3) 用户在 md-editor 中点击“发布到微信”后，才会打开微信公众号发文页并自动填充
+    //
+    // 注意：这里不应自动打开微信公众号官方发文页面。
+    if (target.platform === 'wechat') {
+      await jobLogger({
+        level: 'info',
+        step: 'wechat',
+        message: '微信公众号：已切换到「先预览后发布」流程，打开微信 Markdown 编辑器',
+      });
+
+      try {
+        await ChromeStorageBridge.saveArticle({
+          id: processedPost.id || jobId,
+          title: processedPost.title || '未命名标题',
+          content: processedPost.body_md || '',
+          sourceUrl: (processedPost as any).source_url || undefined,
+          updatedAt: Date.now(),
+        });
+
+        const mdEditorBaseUrl = chrome.runtime.getURL('md-editor/md-editor.html');
+        const mdEditorUrl = `${mdEditorBaseUrl}?from=synccaster`;
+
+        try {
+          const allTabs = await chrome.tabs.query({});
+          const existing = (allTabs || []).find((t) => (t.url || '').startsWith(mdEditorBaseUrl));
+          if (existing?.id) {
+            await chrome.tabs.update(existing.id, { url: mdEditorUrl, active: true });
+          } else {
+            await chrome.tabs.create({ url: mdEditorUrl, active: true });
+          }
+        } catch {
+          // tabs 查询/更新失败时兜底：直接新开
+          await chrome.tabs.create({ url: mdEditorUrl, active: true });
+        }
+
+        await jobLogger({
+          level: 'info',
+          step: 'wechat',
+          message: '已打开微信 Markdown 编辑器：请在编辑器中预览排版并点击「发布到微信」继续',
+          meta: { url: mdEditorUrl },
+        });
+
+        return {
+          success: false,
+          error: '已打开微信 Markdown 编辑器，请在编辑器中点击「发布到微信」继续',
+          meta: { unconfirmed: true, currentUrl: mdEditorUrl, deferredToMdEditor: true },
+        };
+      } catch (e: any) {
+        await jobLogger({
+          level: 'error',
+          step: 'wechat',
+          message: '打开微信 Markdown 编辑器失败',
+          meta: { error: e?.message },
+        });
+        return { success: false, error: e?.message || '打开微信 Markdown 编辑器失败' };
+      }
+    }
+
     const manifest = buildAssetManifest(processedPost);
     let strategy = getImageStrategy(target.platform);
 
@@ -242,7 +302,20 @@ export async function publishToTarget(
 
     // 转换内容
     await jobLogger({ level: 'info', step: 'transform', message: '转换内容以适配目标平台' });
-    const payload = await adapter.transform(processedPost as any, { config: target.config || {} });
+    let payload = await adapter.transform(processedPost as any, { config: target.config || {} });
+
+    // Rich-text only platforms: ensure we have HTML for paste/injection (doesn't affect Markdown platforms).
+    if (
+      adapter?.capabilities?.supportsMarkdown === false &&
+      adapter?.capabilities?.supportsHtml &&
+      !payload?.contentHtml &&
+      payload?.contentMarkdown
+    ) {
+      payload = {
+        ...payload,
+        contentHtml: renderMarkdownToHtmlForPaste(String(payload.contentMarkdown)),
+      };
+    }
 
     // 发布（根据 kind 路由）
     await jobLogger({ level: 'info', step: 'publish', message: `开始发布... (模式: ${adapter.kind})` });
@@ -256,64 +329,7 @@ export async function publishToTarget(
         const reuseKey = `${jobId}:${target.platform}:${target.accountId}`;
         
         // 获取目标 URL
-        let targetUrl: string;
-        
-        // 微信公众号等平台需要动态获取编辑页面 URL
-        if (target.platform === 'wechat') {
-          // 微信公众号需要先在后台获取 token，再进入编辑页（复用同一个 tab，避免打开多个页面）
-          await jobLogger({ level: 'info', step: 'dom', message: '微信公众号：获取 token 并进入编辑页面' });
-          
-          try {
-            const homeUrl = 'https://mp.weixin.qq.com/';
-
-            const getTokenScript = async () => {
-              const urlParams = new URLSearchParams(window.location.search);
-              let token = urlParams.get('token');
-
-              if (!token) {
-                const scripts = document.querySelectorAll('script');
-                for (const script of scripts) {
-                  const match = script.textContent?.match(/token['":\\s]+['\"]?(\\d+)['\"]?/);
-                  if (match) {
-                    token = match[1];
-                    break;
-                  }
-                }
-              }
-
-              if (!token && (window as any).wx && (window as any).wx.cgiData) {
-                token = (window as any).wx.cgiData.token;
-              }
-
-              if (!token) {
-                try {
-                  const stored = localStorage.getItem('wx_token');
-                  if (stored) token = stored;
-                } catch {}
-              }
-
-              return token;
-            };
-
-            const token = await executeInOrigin(homeUrl, getTokenScript, [], {
-              closeTab: false,
-              active: activeTab,
-              reuseKey,
-            });
-
-            if (!token) {
-              throw new Error('无法获取微信公众号 token，请确保已登录');
-            }
-
-            targetUrl = buildWechatEditorUrl(String(token));
-            await jobLogger({ level: 'info', step: 'dom', message: `编辑页面 URL: ${targetUrl}` });
-          } catch (e: any) {
-            await jobLogger({ level: 'error', step: 'dom', message: '获取微信编辑页面失败，请确保已登录微信公众号', meta: { error: e?.message } });
-            throw new Error('获取微信编辑页面失败，请确保已登录微信公众号');
-          }
-        } else {
-          targetUrl = toDomOpenUrl(dom.matchers?.[0] || '');
-        }
+        const targetUrl = toDomOpenUrl(dom.matchers?.[0] || '');
         
         if (!targetUrl) {
           throw new Error('DOM adapter missing target URL');

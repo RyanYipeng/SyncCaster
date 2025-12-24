@@ -119,38 +119,24 @@ export const segmentfaultAdapter: PlatformAdapter = {
         }
         await sleep(500);
 
-        // 3. 点击发布按钮
-        console.log('[segmentfault] Step 3: 点击发布按钮');
-        const publishBtn = Array.from(document.querySelectorAll('button'))
-          .find(btn => btn.textContent?.includes('发布')) as HTMLElement;
-        if (!publishBtn) throw new Error('未找到发布按钮');
-        publishBtn.click();
-        await sleep(1500);
+        // 3. 内容填充完成，不执行发布操作
+        // 根据统一发布控制原则：最终发布必须由用户手动完成
+        console.log('[segmentfault] 内容填充完成');
+        console.log('[segmentfault] ⚠️ 发布操作需要用户手动完成');
 
-        // 4. 处理发布弹窗
-        console.log('[segmentfault] Step 4: 处理发布弹窗');
-        const confirmBtn = Array.from(document.querySelectorAll('button'))
-          .find(btn => /确定|发布/.test(btn.textContent || '')) as HTMLElement;
-        if (confirmBtn) {
-          confirmBtn.click();
-          await sleep(2000);
-        }
-
-        // 5. 等待获取文章 URL
-        console.log('[segmentfault] Step 5: 等待文章 URL');
-        const checkUrl = () => /segmentfault\.com\/a\/\d+/.test(window.location.href);
-        for (let i = 0; i < 40; i++) {
-          if (checkUrl()) {
-            console.log('[segmentfault] 发布成功:', window.location.href);
-            return { url: window.location.href };
-          }
-          await sleep(500);
-        }
-
-        throw new Error('发布超时：未跳转到文章页');
+        return { 
+          url: window.location.href,
+          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+        };
       } catch (error: any) {
-        console.error('[segmentfault] 发布失败:', error);
-        throw error;
+        console.error('[segmentfault] 填充失败:', error);
+        return {
+          url: window.location.href,
+          __synccasterError: {
+            message: error?.message || String(error),
+            stack: error?.stack,
+          },
+        } as any;
       }
     },
   },
