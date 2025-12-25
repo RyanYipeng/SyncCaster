@@ -192,6 +192,8 @@ export const csdnAdapter: PlatformAdapter = {
           const cm = cmEl?.CodeMirror;
           if (cm?.setValue) {
             console.log('[csdn-fill] CodeMirror 5 instance found, setting value');
+            // 先清空原有内容，再设置新内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+            cm.setValue('');
             cm.setValue(markdown);
             cm.refresh?.();
             try {
@@ -215,7 +217,11 @@ export const csdnAdapter: PlatformAdapter = {
           const models = monaco?.editor?.getModels?.() as any[] | undefined;
           if (models?.length) {
             console.log('[csdn-fill] Monaco models found:', models.length);
-            for (const m of models) m?.setValue?.(markdown);
+            // 先清空原有内容，再设置新内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+            for (const m of models) {
+              m?.setValue?.('');
+              m?.setValue?.(markdown);
+            }
             return true;
           }
         } catch {}
@@ -223,6 +229,8 @@ export const csdnAdapter: PlatformAdapter = {
         try {
           const ta = monacoRoot.querySelector('textarea.inputarea, textarea') as HTMLTextAreaElement | null;
           if (!ta) return false;
+          // 先清空再设置
+          setNativeValue(ta, '');
           setNativeValue(ta, markdown);
           return true;
         } catch {
@@ -298,6 +306,8 @@ export const csdnAdapter: PlatformAdapter = {
           
           if (view?.dispatch && view?.state?.doc) {
             console.log('[csdn-fill] Dispatching to CodeMirror 6 view');
+            // 先清空原有内容，再设置新内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+            // 使用 from: 0, to: doc.length 替换全部内容
             view.dispatch({
               changes: { from: 0, to: view.state.doc.length, insert: markdown },
             });
@@ -389,6 +399,8 @@ export const csdnAdapter: PlatformAdapter = {
         tas.sort((a, b) => getRectArea(b) - getRectArea(a));
         const ta = tas[0];
         console.log('[csdn-fill] Using textarea:', ta.className, getRectArea(ta));
+        // 先清空原有内容，再设置新内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+        setNativeValue(ta, '');
         setNativeValue(ta, markdown);
         return true;
       };
@@ -408,6 +420,11 @@ export const csdnAdapter: PlatformAdapter = {
         
         const doc = target.ownerDocument;
         const win = doc.defaultView || window;
+        
+        // 先清空原有内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+        target.innerHTML = '';
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(100);
         
         target.focus();
         await sleep(100);

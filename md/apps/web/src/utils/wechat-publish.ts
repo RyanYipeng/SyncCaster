@@ -4,7 +4,8 @@
  *
  * 目标流程：
  * - 用户在 md-editor 预览排版
- * - 点击“发布到微信”后，才打开公众号发文页并自动填充
+ * - 点击"发布到微信"后，提示用户点击"复制"按钮，然后手动粘贴到微信公众号发文页面
+ * - 插件不再负责正文的自动填充，由用户手动粘贴
  */
 
 export interface WechatPublishPayload {
@@ -19,6 +20,8 @@ export interface WechatPublishResult {
   message: string
   url?: string
   meta?: Record<string, any>
+  /** 是否需要用户手动复制粘贴 */
+  needManualCopy?: boolean
 }
 
 export function isExtensionEnvironment(): boolean {
@@ -73,9 +76,20 @@ export async function publishToWechat(payload: WechatPublishPayload): Promise<We
     if (response?.success) {
       return {
         success: true,
-        message: response?.message || '已打开微信公众号发文页面并自动填充标题和正文',
+        message: response?.message || '已打开微信公众号发文页面，请点击上方"复制"按钮复制内容后手动粘贴',
         url: response?.url,
         meta: response?.meta,
+        needManualCopy: response?.needManualCopy,
+      }
+    }
+
+    // 检查是否是需要手动复制的情况
+    if (response?.needManualCopy) {
+      return {
+        success: false,
+        message: response?.message || '请点击上方"复制"按钮复制内容，然后在微信公众号发文页面手动粘贴',
+        needManualCopy: true,
+        url: response?.url,
       }
     }
 
@@ -92,4 +106,3 @@ export async function publishToWechat(payload: WechatPublishPayload): Promise<We
     }
   }
 }
-

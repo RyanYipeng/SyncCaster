@@ -293,7 +293,12 @@ async function handlePublishToWechat() {
     if (result.success) {
       toast.success(result.message)
     } else {
-      toast.error(result.message)
+      // 如果是需要手动复制的情况，显示提示信息
+      if (result.needManualCopy) {
+        toast.info(result.message, { duration: 8000 })
+      } else {
+        toast.error(result.message)
+      }
     }
   } catch (error) {
     console.error('[header] 发布失败:', error)
