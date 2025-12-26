@@ -7,10 +7,8 @@ import type { PlatformAdapter } from './base';
  * - 入口：https://segmentfault.com/write?freshman=1
  * - 编辑器：Markdown 编辑器
  * - 支持：Markdown 语法
- * - LaTeX 公式：特殊语法
- *   - 行间公式：$$公式$$
- *   - 行内公式：\( 公式 \)
- *   - 注意：公式前后不能有 $ 符号
+ * - LaTeX 公式：
+ *   - 行内公式和块级公式都使用 $$公式$$ 语法
  * - 结构：标题 + 正文
  */
 export const segmentfaultAdapter: PlatformAdapter = {
@@ -38,25 +36,25 @@ export const segmentfaultAdapter: PlatformAdapter = {
   },
 
   async transform(post, { config }) {
-    // 思否 LaTeX 语法转换
-    // 行内公式：$..$ -> \( .. \)
-    // 块级公式：$$...$$ -> $$...$$（保持不变）
-    let markdown = post.body_md;
+    // 思否 LaTeX 语法：行内和块级公式都使用双美元符号 $$...$$
+    // 需要将标准 Markdown 的单 $ 行内公式转换为双 $$
+    let markdown = post.body_md || '';
     
-    // 先处理块级公式（保持 $$ 不变）
-    const blockFormulas: string[] = [];
-    markdown = markdown.replace(/\$\$([^$]+)\$\$/g, (_, formula) => {
-      blockFormulas.push(formula);
-      return `$$BLOCK_FORMULA_${blockFormulas.length - 1}$$`;
-    });
+    // 使用特殊标记替换，避免 $ 符号的特殊处理问题
+    const DOLLAR = '\uFFFF';  // 使用 Unicode 替换字符作为临时标记
     
-    // 转换行内公式：$..$ -> \\( .. \\)
-    markdown = markdown.replace(/\$([^$\n]+)\$/g, '\\\\( $1 \\\\)');
+    // 1. 先将所有 $$ 替换为临时标记（保护块级公式）
+    markdown = markdown.split('$$').join(DOLLAR + DOLLAR);
     
-    // 恢复块级公式
-    blockFormulas.forEach((formula, i) => {
-      markdown = markdown.replace(`$$BLOCK_FORMULA_${i}$$`, `$$${formula}$$`);
-    });
+    // 2. 将剩余的单个 $ 替换为双 $$（转换行内公式）
+    markdown = markdown.split('$').join(DOLLAR + DOLLAR);
+    
+    // 3. 将临时标记还原为 $
+    markdown = markdown.split(DOLLAR).join('$');
+    
+    // 4. 规范化分割线：将 "* * *" 转换为 "---"
+    markdown = markdown.replace(/^\* \* \*$/gm, '---');
+    markdown = markdown.replace(/^\*\*\*$/gm, '---');
     
     return {
       title: post.title,
@@ -73,7 +71,8 @@ export const segmentfaultAdapter: PlatformAdapter = {
 
   dom: {
     matchers: [
-      'https://segmentfault.com/write*',
+      // 注意：直接使用带参数的完整 URL，避免跳转到 howtowrite 提示页
+      'https://segmentfault.com/write?freshman=1',
     ],
     fillAndPublish: async function (payload) {
       console.log('[segmentfault] fillAndPublish starting', payload);
@@ -120,7 +119,6 @@ export const segmentfaultAdapter: PlatformAdapter = {
         await sleep(500);
 
         // 3. 内容填充完成，不执行发布操作
-        // 根据统一发布控制原则：最终发布必须由用户手动完成
         console.log('[segmentfault] 内容填充完成');
         console.log('[segmentfault] ⚠️ 发布操作需要用户手动完成');
 
