@@ -207,6 +207,38 @@ const leftPaneWidth = ref(50);
 const isResizingHeight = ref(false);
 const isResizingWidth = ref(false);
 
+// 尺寸记忆 - 存储键
+const STORAGE_KEY_HEIGHT = 'synccaster_editor_height';
+const STORAGE_KEY_WIDTH = 'synccaster_editor_width';
+
+// 加载保存的尺寸
+function loadSavedDimensions() {
+  try {
+    const savedHeight = localStorage.getItem(STORAGE_KEY_HEIGHT);
+    const savedWidth = localStorage.getItem(STORAGE_KEY_WIDTH);
+    if (savedHeight) {
+      const h = parseInt(savedHeight, 10);
+      if (!isNaN(h) && h >= 200 && h <= 700) {
+        editorHeight.value = h;
+      }
+    }
+    if (savedWidth) {
+      const w = parseFloat(savedWidth);
+      if (!isNaN(w) && w >= 25 && w <= 75) {
+        leftPaneWidth.value = w;
+      }
+    }
+  } catch {}
+}
+
+// 保存尺寸到 localStorage
+function saveDimensions() {
+  try {
+    localStorage.setItem(STORAGE_KEY_HEIGHT, String(editorHeight.value));
+    localStorage.setItem(STORAGE_KEY_WIDTH, String(leftPaneWidth.value));
+  } catch {}
+}
+
 // 高度拖拽
 function startResizeHeight(e: MouseEvent) {
   e.preventDefault();
@@ -223,6 +255,8 @@ function startResizeHeight(e: MouseEvent) {
     isResizingHeight.value = false;
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    // 保存尺寸
+    saveDimensions();
   };
   
   document.addEventListener('mousemove', onMove);
@@ -248,6 +282,8 @@ function startResizeWidth(e: MouseEvent) {
     isResizingWidth.value = false;
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    // 保存尺寸
+    saveDimensions();
   };
   
   document.addEventListener('mousemove', onMove);
@@ -560,7 +596,7 @@ function setupStorageListener() {
   } catch {}
 }
 
-onMounted(() => { load(); document.addEventListener('visibilitychange', handleVisibilityChange); window.addEventListener('beforeunload', handleBeforeUnload); setupStorageListener(); });
+onMounted(() => { loadSavedDimensions(); load(); document.addEventListener('visibilitychange', handleVisibilityChange); window.addEventListener('beforeunload', handleBeforeUnload); setupStorageListener(); });
 onUnmounted(() => { document.removeEventListener('visibilitychange', handleVisibilityChange); window.removeEventListener('beforeunload', handleBeforeUnload); if (unsubscribeStorageChange) unsubscribeStorageChange(); if (rafId) cancelAnimationFrame(rafId); });
 </script>
 

@@ -68,7 +68,7 @@ export const zhihuAdapter: PlatformAdapter = {
 
   dom: {
     matchers: [
-      'https://zhuanlan.zhihu.com/write',
+      'https://zhuanlan.zhihu.com/write*',
     ],
     fillAndPublish: async function(payload: any) {
       console.log('[zhihu] fillAndPublish starting', payload);
@@ -266,28 +266,55 @@ export const zhihuAdapter: PlatformAdapter = {
         // 3. 处理 Markdown 解析弹窗（仅格式解析确认，不涉及发布）
         // 当知乎识别到 Markdown 格式时，会弹出"确认并解析"提示
         console.log('[zhihu] Step 3: 处理 Markdown 解析弹窗');
-        await sleep(500);
+        await sleep(1000);
 
         // 查找并点击"确认并解析"按钮（格式解析确认）
-        for (let i = 0; i < 15; i++) {
-          const parseBtn = Array.from(document.querySelectorAll('button')).find((btn) => {
-            const text = btn.textContent || '';
+        let parseClicked = false;
+        for (let i = 0; i < 20; i++) {
+          // 查找所有按钮
+          const allButtons = Array.from(document.querySelectorAll('button, [role="button"], .Button'));
+          const parseBtn = allButtons.find((btn) => {
+            const text = (btn.textContent || '').trim();
             // 匹配各种可能的解析确认按钮文案
             return text.includes('确认并解析') || 
                    text.includes('解析为') ||
                    text.includes('转换为') ||
-                   (text.includes('Markdown') && text.includes('确认'));
+                   text === '确认' ||
+                   (text.includes('Markdown') && (text.includes('确认') || text.includes('解析')));
           });
 
           if (parseBtn) {
             console.log('[zhihu] Found Markdown parse button:', parseBtn.textContent);
             console.log('[zhihu] Clicking parse button (format conversion only, not publish)...');
             (parseBtn as HTMLElement).click();
-            await sleep(1500);
+            parseClicked = true;
+            await sleep(2000);
             console.log('[zhihu] Markdown parse completed');
             break;
           }
+          
+          // 也检查弹窗/对话框中的按钮
+          const dialogs = document.querySelectorAll('[role="dialog"], .Modal, .Popover, .css-1morss8');
+          for (const dialog of dialogs) {
+            const dialogBtn = Array.from(dialog.querySelectorAll('button')).find(btn => {
+              const text = (btn.textContent || '').trim();
+              return text.includes('确认') || text.includes('解析');
+            });
+            if (dialogBtn) {
+              console.log('[zhihu] Found parse button in dialog:', dialogBtn.textContent);
+              (dialogBtn as HTMLElement).click();
+              parseClicked = true;
+              await sleep(2000);
+              break;
+            }
+          }
+          if (parseClicked) break;
+          
           await sleep(300);
+        }
+        
+        if (!parseClicked) {
+          console.log('[zhihu] No Markdown parse dialog found (may not be needed)');
         }
 
         // 4. 内容填充完成，不执行发布操作
