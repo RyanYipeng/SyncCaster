@@ -120,9 +120,8 @@ const PLATFORMS: Record<string, PlatformConfig> = {
   aliyun: {
     id: 'aliyun',
     name: '阿里云开发者社区',
-    // 直接使用开发者社区主页，页面会自动显示登录入口
-    // 原登录页面 /user/login 已失效
-    loginUrl: 'https://developer.aliyun.com/',
+    // 使用阿里云统一登录页面，登录后会自动跳转回开发者社区
+    loginUrl: 'https://account.aliyun.com/login/login.htm?oauth_callback=https%3A%2F%2Fdeveloper.aliyun.com%2F',
     homeUrl: 'https://developer.aliyun.com/',
     // 只匹配开发者社区域名，避免在 www.aliyun.com 上检测
     urlPattern: /developer\.aliyun\.com/,
@@ -553,9 +552,12 @@ export class AccountService {
    * 
    * 流程：
    * 1. 打开平台登录页面
-   * 2. 在该页面启动登录状态轮询
-   * 3. 登录成功后，content script 通知 background
-   * 4. 保存账号并关闭登录页面
+   * 2. 在该页面启动登录状态轮询（优先使用直接 API 检测）
+   * 3. 登录成功后，保存账号并关闭登录页面
+   * 
+   * 优化：
+   * - 对于支持直接 API 的平台，优先使用 fetchPlatformUserInfo（更快，不依赖页面加载）
+   * - 减少轮询延迟和间隔，提升响应速度
    */
   static async addAccount(platform: string): Promise<Account> {
     const platformName = PLATFORM_NAMES[platform] || platform;
@@ -567,19 +569,38 @@ export class AccountService {
     
     logger.info('add-account', `引导登录: ${platformName}`);
     
-    // 先检查是否已经登录
-    const existingTab = await findPlatformTab(platform);
-    if (existingTab?.id) {
-      const state = await checkLoginInTab(existingTab.id);
-      if (state.loggedIn) {
-        logger.info('add-account', '检测到已登录，直接保存账号');
-        const account = await this.saveAccount(platform, {
-          userId: state.userId || `${platform}_${Date.now()}`,
-          nickname: state.nickname || platformName + '用户',
-          avatar: state.avatar,
-          platform,
-        }, state.meta);
-        return await this.maybeEnrichAccountProfile(account);
+    // 先检查是否已经登录（优先使用直接 API）
+    if (supportDirectApi(platform)) {
+      try {
+        const userInfo = await fetchPlatformUserInfo(platform);
+        if (userInfo.loggedIn) {
+          logger.info('add-account', '通过 API 检测到已登录，直接保存账号');
+          const account = await this.saveAccount(platform, {
+            userId: userInfo.userId || `${platform}_${Date.now()}`,
+            nickname: userInfo.nickname || platformName + '用户',
+            avatar: userInfo.avatar,
+            platform,
+          }, userInfo.meta);
+          return await this.maybeEnrichAccountProfile(account);
+        }
+      } catch (e: any) {
+        logger.debug('add-account', 'API 预检测失败，继续打开登录页', { error: e.message });
+      }
+    } else {
+      // 回退：使用标签页检测
+      const existingTab = await findPlatformTab(platform);
+      if (existingTab?.id) {
+        const state = await checkLoginInTab(existingTab.id);
+        if (state.loggedIn) {
+          logger.info('add-account', '检测到已登录，直接保存账号');
+          const account = await this.saveAccount(platform, {
+            userId: state.userId || `${platform}_${Date.now()}`,
+            nickname: state.nickname || platformName + '用户',
+            avatar: state.avatar,
+            platform,
+          }, state.meta);
+          return await this.maybeEnrichAccountProfile(account);
+        }
       }
     }
     
@@ -591,18 +612,20 @@ export class AccountService {
       throw new Error('无法打开登录页面');
     }
     
-    // 等待页面加载
-    await waitForTabLoad(tab.id);
-    
     // 创建 Promise 等待登录成功
     return new Promise<Account>((resolve, reject) => {
       const tabId = tab.id!;
       let pollingStopped = false;
       let attempts = 0;
       const maxAttempts = 180; // 3分钟
+      const useDirectApi = supportDirectApi(platform);
       
-      // 设置登录成功回调
+      // 轮询间隔：直接 API 检测更快，可以用更短的间隔
+      const pollInterval = useDirectApi ? 1000 : 2000;
+      
+      // 设置登录成功回调（来自 content script 的主动通知）
       this.loginCallbacks.set(platform, async (state) => {
+        if (pollingStopped) return;
         pollingStopped = true;
         logger.info('add-account', '登录成功回调触发', state);
         
@@ -631,7 +654,7 @@ export class AccountService {
         if (pollingStopped) return;
         
         attempts++;
-        logger.info('add-account', `轮询检测 ${attempts}/${maxAttempts}`);
+        logger.info('add-account', `轮询检测 ${attempts}/${maxAttempts}${useDirectApi ? ' (API)' : ''}`);
         
         // 检查标签页是否还存在
         try {
@@ -645,18 +668,45 @@ export class AccountService {
         
         // 检测登录状态
         try {
-          const state = await checkLoginInTab(tabId);
+          let loggedIn = false;
+          let userId: string | undefined;
+          let nickname: string | undefined;
+          let avatar: string | undefined;
+          let meta: any;
           
-          if (state.loggedIn) {
+          // 优先使用直接 API 检测（更快，不依赖页面加载状态）
+          if (useDirectApi) {
+            const userInfo = await fetchPlatformUserInfo(platform);
+            if (userInfo.loggedIn) {
+              loggedIn = true;
+              userId = userInfo.userId;
+              nickname = userInfo.nickname;
+              avatar = userInfo.avatar;
+              meta = userInfo.meta;
+              logger.info('add-account', 'API 检测到登录成功', { userId, nickname });
+            }
+          } else {
+            // 回退：使用 content script 检测
+            const state = await checkLoginInTab(tabId);
+            if (state.loggedIn) {
+              loggedIn = true;
+              userId = state.userId;
+              nickname = state.nickname;
+              avatar = state.avatar;
+              meta = state.meta;
+            }
+          }
+          
+          if (loggedIn) {
             pollingStopped = true;
             this.loginCallbacks.delete(platform);
             
             const account = await this.saveAccount(platform, {
-              userId: state.userId || `${platform}_${Date.now()}`,
-              nickname: state.nickname || platformName + '用户',
-              avatar: state.avatar,
+              userId: userId || `${platform}_${Date.now()}`,
+              nickname: nickname || platformName + '用户',
+              avatar,
               platform,
-            }, state.meta);
+            }, meta);
             
             // 关闭登录标签页
             try {
@@ -673,7 +723,7 @@ export class AccountService {
         
         // 继续轮询
         if (attempts < maxAttempts && !pollingStopped) {
-          setTimeout(poll, 2000);
+          setTimeout(poll, pollInterval);
         } else if (!pollingStopped) {
           pollingStopped = true;
           this.loginCallbacks.delete(platform);
@@ -687,8 +737,8 @@ export class AccountService {
         }
       };
       
-      // 开始轮询
-      setTimeout(poll, 3000); // 等待页面加载后开始
+      // 开始轮询（减少首次延迟）
+      setTimeout(poll, 1000);
     });
   }
   
@@ -1214,9 +1264,13 @@ export class AccountService {
    * 
    * 流程：
    * 1. 打开平台登录页面
-   * 2. 轮询检测登录成功（使用 checkLoginInTab）
+   * 2. 轮询检测登录成功（优先使用直接 API 检测）
    * 3. 登录成功后更新账号状态为 ACTIVE
    * 4. 关闭登录标签页并返回更新后的账号
+   * 
+   * 优化：
+   * - 对于支持直接 API 的平台，优先使用 fetchPlatformUserInfo（更快，不依赖页面加载）
+   * - 减少轮询延迟，提升响应速度
    * 
    * Requirements: 4.2, 4.3, 4.4, 4.5
    * 
@@ -1226,7 +1280,7 @@ export class AccountService {
   static async reloginAccount(account: Account): Promise<Account> {
     const platformName = PLATFORM_NAMES[account.platform] || account.platform;
     const config = PLATFORMS[account.platform];
-    
+    const useDirectApi = supportDirectApi(account.platform);
     if (!config) {
       throw new Error(`不支持的平台: ${platformName}`);
     }
@@ -1243,14 +1297,14 @@ export class AccountService {
     
     const tabId = tab.id;
     
-    // 等待页面加载
-    await waitForTabLoad(tabId);
-    
     // 创建 Promise 等待登录成功
     return new Promise<Account>((resolve, reject) => {
       let pollingStopped = false;
       let attempts = 0;
-      const maxAttempts = 180; // 3分钟（每秒检测一次）
+      const maxAttempts = 180; // 3分钟
+      
+      // 轮询间隔：直接 API 检测更快，可以用更短的间隔
+      const pollInterval = useDirectApi ? 1000 : 1000;
       
       // 设置登录成功回调（来自 content script 的主动通知）
       this.loginCallbacks.set(account.platform, async (state) => {
@@ -1298,7 +1352,7 @@ export class AccountService {
         if (pollingStopped) return;
         
         attempts++;
-        logger.debug('relogin', `轮询检测 ${attempts}/${maxAttempts}`);
+        logger.debug('relogin', `轮询检测 ${attempts}/${maxAttempts}${useDirectApi ? ' (API)' : ''}`);
         
         // 检查标签页是否还存在
         try {
@@ -1313,9 +1367,36 @@ export class AccountService {
         
         // 检测登录状态
         try {
-          const state = await checkLoginInTab(tabId);
+          let loggedIn = false;
+          let userId: string | undefined;
+          let nickname: string | undefined;
+          let avatar: string | undefined;
+          let meta: any;
           
-          if (state.loggedIn) {
+          // 优先使用直接 API 检测（更快，不依赖页面加载状态）
+          if (useDirectApi) {
+            const userInfo = await fetchPlatformUserInfo(account.platform);
+            if (userInfo.loggedIn) {
+              loggedIn = true;
+              userId = userInfo.userId;
+              nickname = userInfo.nickname;
+              avatar = userInfo.avatar;
+              meta = userInfo.meta;
+              logger.info('relogin', 'API 检测到登录成功', { userId, nickname });
+            }
+          } else {
+            // 回退：使用 content script 检测
+            const state = await checkLoginInTab(tabId);
+            if (state.loggedIn) {
+              loggedIn = true;
+              userId = state.userId;
+              nickname = state.nickname;
+              avatar = state.avatar;
+              meta = state.meta;
+            }
+          }
+          
+          if (loggedIn) {
             pollingStopped = true;
             this.loginCallbacks.delete(account.platform);
             
@@ -1324,13 +1405,13 @@ export class AccountService {
             // 更新账号状态为 ACTIVE，重置连续失败次数，清除错误信息
              const updated: Account = {
                ...account,
-               nickname: pickBetterNickname(account.platform, account.nickname, state.nickname),
-               avatar: pickBetterAvatar(account.avatar, state.avatar),
+               nickname: pickBetterNickname(account.platform, account.nickname, nickname),
+               avatar: pickBetterAvatar(account.avatar, avatar),
                updatedAt: now,
                meta: {
                  ...(account.meta || {}),
-                 ...(state.meta || {}),
-                ...(state.userId ? { profileId: state.userId } : {}),
+                 ...(meta || {}),
+                ...(userId ? { profileId: userId } : {}),
               },
               status: AccountStatus.ACTIVE,
               lastCheckAt: now,
@@ -1356,7 +1437,7 @@ export class AccountService {
         
         // 继续轮询
         if (attempts < maxAttempts && !pollingStopped) {
-          setTimeout(poll, 1000); // 每秒检测一次
+          setTimeout(poll, pollInterval);
         } else if (!pollingStopped) {
           pollingStopped = true;
           this.loginCallbacks.delete(account.platform);
@@ -1370,8 +1451,8 @@ export class AccountService {
         }
       };
       
-      // 开始轮询（等待页面加载后开始）
-      setTimeout(poll, 2000);
+      // 开始轮询（减少首次延迟）
+      setTimeout(poll, 1000);
     });
   }
   

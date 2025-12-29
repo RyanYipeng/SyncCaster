@@ -410,45 +410,24 @@ export const aliyunAdapter: PlatformAdapter = {
           }
         }
 
-        // 3. 点击发布按钮
-        console.log('[aliyun] Step 3: 点击发布按钮');
-        const clickable = Array.from(document.querySelectorAll('button, a, [role="button"]')) as HTMLElement[];
-        const publishBtn = clickable.find(el => {
-          const text = (el.textContent || '').trim();
-          if (!text.includes('发布')) return false;
-          if (!isVisible(el)) return false;
-          const disabled = (el as any).disabled || el.getAttribute('aria-disabled') === 'true';
-          if (disabled) return false;
-          return true;
-        });
-        if (!publishBtn) throw new Error('未找到发布按钮');
-        publishBtn.click();
-        await sleep(1500);
+        // 3. 内容填充完成，不执行发布操作
+        // 根据统一发布控制原则：最终发布必须由用户手动完成
+        console.log('[aliyun] 内容填充完成');
+        console.log('[aliyun] ⚠️ 发布操作需要用户手动完成');
 
-        // 4. 处理发布弹窗
-        console.log('[aliyun] Step 4: 处理发布弹窗');
-        const confirmBtn = Array.from(document.querySelectorAll('button, [role="button"]'))
-          .find(btn => isVisible(btn) && /确定|确认|发布/.test((btn.textContent || '').trim())) as HTMLElement;
-        if (confirmBtn) {
-          confirmBtn.click();
-          await sleep(2000);
-        }
-
-        // 5. 等待获取文章 URL
-        console.log('[aliyun] Step 5: 等待文章 URL');
-        const checkUrl = () => /developer\.aliyun\.com\/article\/\d+/.test(window.location.href);
-        for (let i = 0; i < 40; i++) {
-          if (checkUrl()) {
-            console.log('[aliyun] 发布成功:', window.location.href);
-            return { url: window.location.href };
-          }
-          await sleep(500);
-        }
-
-        throw new Error('发布超时：未跳转到文章页');
+        return { 
+          url: window.location.href,
+          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+        };
       } catch (error: any) {
-        console.error('[aliyun] 发布失败:', error);
-        throw error;
+        console.error('[aliyun] 填充失败:', error);
+        return {
+          url: window.location.href,
+          __synccasterError: {
+            message: error?.message || String(error),
+            stack: error?.stack,
+          },
+        } as any;
       }
     },
   },

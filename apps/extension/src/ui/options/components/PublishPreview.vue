@@ -288,9 +288,7 @@ async function copyCurrentPreview() {
   }
   
   const bodyHtml = isWechat ? (wechatPreviewHtml.value || '') : (previewHtml.value || '');
-  const titleHtml = `<h1>${props.title || ''}</h1>`;
-  const styleHtml = isWechat && wechatPreviewCss.value ? `<style>${wechatPreviewCss.value}</style>` : '';
-  const fullHtml = `${styleHtml}${titleHtml}${bodyHtml}`;
+  const fullHtml = bodyHtml;
   const plain = stripHtmlToText(fullHtml);
 
   try {

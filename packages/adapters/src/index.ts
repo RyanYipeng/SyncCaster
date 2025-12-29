@@ -10,6 +10,7 @@ export * from './tencent-cloud';
 export * from './aliyun';
 export * from './segmentfault';
 export * from './bilibili';
+export * from './oschina';
 
 import { registry } from './base';
 import { wechatAdapter } from './wechat';
@@ -23,6 +24,7 @@ import { tencentCloudAdapter } from './tencent-cloud';
 import { aliyunAdapter } from './aliyun';
 import { segmentfaultAdapter } from './segmentfault';
 import { bilibiliAdapter } from './bilibili';
+import { oschinaAdapter } from './oschina';
 
 // 注册所有适配器
 registry.register(wechatAdapter);
@@ -36,3 +38,4 @@ registry.register(tencentCloudAdapter);
 registry.register(aliyunAdapter);
 registry.register(segmentfaultAdapter);
 registry.register(bilibiliAdapter);
+registry.register(oschinaAdapter);

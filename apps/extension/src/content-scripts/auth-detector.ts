@@ -1194,6 +1194,10 @@ const segmentfaultDetector: PlatformAuthDetector = {
 
       if (window.location.pathname.startsWith('/u/')) {
         const profileNameSelectors = [
+          // 思否个人主页用户名在 h3.text-center 中
+          '.userinfo h3.text-center',
+          'h3.text-center.pt-3',
+          '.card-body h3.text-center',
           '[class*="profile"] [class*="name"]',
           '[class*="user"] [class*="name"]',
           '.user__name',
@@ -1202,6 +1206,7 @@ const segmentfaultDetector: PlatformAuthDetector = {
           '.profile-name',
           'main h1',
           'main h2',
+          'main h3',
         ];
 
         for (const selector of profileNameSelectors) {

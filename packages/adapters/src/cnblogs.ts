@@ -9,6 +9,10 @@ import type { PlatformAdapter } from './base';
  * - 支持：Markdown 语法
  * - LaTeX：需在后台设置 https://i.cnblogs.com/preference 开启"启用数学公式支持"
  * - 结构：标题 + 正文
+ * 
+ * 发布策略：
+ * - 直接填充 Markdown 原文到编辑器
+ * - 不执行最终发布操作，由用户手动完成
  */
 export const cnblogsAdapter: PlatformAdapter = {
   id: 'cnblogs',
@@ -99,35 +103,24 @@ export const cnblogsAdapter: PlatformAdapter = {
         }
         await sleep(500);
 
-        // 3. 点击发布按钮
-        console.log('[cnblogs] Step 3: 点击发布按钮');
-        const publishBtn = Array.from(document.querySelectorAll('button, a'))
-          .find(btn => /发布|保存/.test(btn.textContent || '')) as HTMLElement;
-        if (!publishBtn) throw new Error('未找到发布按钮');
-        publishBtn.click();
-        await sleep(2000);
+        // 3. 内容填充完成，不执行发布操作
+        // 根据统一发布控制原则：最终发布必须由用户手动完成
+        console.log('[cnblogs] 内容填充完成');
+        console.log('[cnblogs] ⚠️ 发布操作需要用户手动完成');
 
-        // 4. 等待获取文章 URL
-        console.log('[cnblogs] Step 4: 等待文章 URL');
-        const checkUrl = () => /cnblogs\.com\/.*\/p\/\d+/.test(window.location.href);
-        for (let i = 0; i < 40; i++) {
-          if (checkUrl()) {
-            console.log('[cnblogs] 发布成功:', window.location.href);
-            return { url: window.location.href };
-          }
-          await sleep(500);
-        }
-
-        // 博客园可能显示成功提示
-        const successMsg = document.querySelector('.success, [class*="success"]');
-        if (successMsg) {
-          return { url: 'https://www.cnblogs.com/' };
-        }
-
-        throw new Error('发布超时：未跳转到文章页');
+        return { 
+          url: window.location.href,
+          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+        };
       } catch (error: any) {
-        console.error('[cnblogs] 发布失败:', error);
-        throw error;
+        console.error('[cnblogs] 填充失败:', error);
+        return {
+          url: window.location.href,
+          __synccasterError: {
+            message: error?.message || String(error),
+            stack: error?.stack,
+          },
+        } as any;
       }
     },
   },

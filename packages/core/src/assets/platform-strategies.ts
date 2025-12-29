@@ -115,14 +115,14 @@ export const platformImageStrategies: Record<string, ImageUploadStrategy> = {
    * Jianshu
    */
   jianshu: {
-    mode: 'binaryUpload',
+    // 简书的图片上传依赖站内编辑器环境（token/防盗链等），优先用“站内粘贴/拖拽上传”生成可识别 URL。
+    mode: 'domPasteUpload',
     constraints: WEBP_CONSTRAINTS,
-    uploadUrl: 'https://up.qbox.me/',
-    method: 'POST',
-    fileFieldName: 'file',
-    responseParser: (data) => ({
-      url: `https://upload-images.jianshu.io/${data.key}`,
-    }),
+    domPasteConfig: {
+      editorUrl: 'https://www.jianshu.com/writer',
+      editorSelector: '.CodeMirror textarea, .CodeMirror, .kalamu-area, [contenteditable="true"]',
+      timeoutMs: 40000,
+    },
   },
 
   /**
@@ -155,16 +155,19 @@ export const platformImageStrategies: Record<string, ImageUploadStrategy> = {
 
   /**
    * Tencent Cloud developer community
+   * 
+   * 腾讯云开发者社区的图片上传 API 需要登录状态和 CSRF token，
+   * 使用 domPasteUpload 模式可以利用用户在页面的登录状态，
+   * 通过模拟粘贴的方式上传图片，更加稳定可靠。
    */
   'tencent-cloud': {
-    mode: 'binaryUpload',
+    mode: 'domPasteUpload',
     constraints: WEBP_CONSTRAINTS,
-    uploadUrl: 'https://cloud.tencent.com/developer/api/image/upload',
-    method: 'POST',
-    fileFieldName: 'file',
-    responseParser: (data) => ({
-      url: data.data?.url || data.url,
-    }),
+    domPasteConfig: {
+      editorUrl: 'https://cloud.tencent.com/developer/article/write-new',
+      editorSelector: '.CodeMirror textarea, .CodeMirror, textarea, [contenteditable="true"]',
+      timeoutMs: 40000,
+    },
   },
 
   /**

@@ -33,3 +33,5 @@ Thumbs.db
 # Temp
 *.tmp
 .cache
+
+apps/extension/public/md-editor/static/js/

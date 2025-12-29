@@ -1,7 +1,8 @@
 ﻿import { db, type CanonicalPost, type PublishTarget, type LogEntry } from '@synccaster/core';
+import { ChromeStorageBridge } from '@synccaster/core';
 import { getAdapter } from '@synccaster/adapters';
-import { executeInOrigin, getReuseTabInfo } from './inpage-runner';
-import { ImageUploadPipeline, getImageStrategy, type ImageUploadProgress } from '@synccaster/core';
+import { executeInOrigin, getReuseTabInfo, openOrReuseTab } from './inpage-runner';
+import { ImageUploadPipeline, getImageStrategy, type ImageUploadProgress, renderMarkdownToHtmlForPaste } from '@synccaster/core';
 import type { AssetManifest } from '@synccaster/core';
 
 export interface EngineResult {
@@ -50,11 +51,6 @@ export async function appendJobLog(jobId: string, entry: Omit<LogEntry, 'id' | '
     meta: entry.meta,
   };
   await db.jobs.update(jobId, { logs: [...job.logs, log], updatedAt: Date.now() });
-}
-
-function buildWechatEditorUrl(token: string): string {
-  const timestamp = Date.now();
-  return `https://mp.weixin.qq.com/cgi-bin/appmsg?t=media/appmsg_edit_v2&action=edit&isNew=1&type=77&createType=0&token=${token}&lang=zh_CN&timestamp=${timestamp}`;
 }
 
 type DownloadedImage = { url: string; base64: string; mimeType: string };
@@ -124,6 +120,95 @@ export async function publishToTarget(
       ...post,
       body_md: normalizeMarkdownImageUrls(post.body_md || ''),
     };
+
+    // ================================
+    // 微信公众号：两阶段发布流程（先进入 MD 编辑器预览）
+    // ================================
+    // 1) 用户在 SyncCaster 中点击发布
+    // 2) 打开内置微信 Markdown 编辑器（md-editor）进行预览排版
+    // 3) 用户在 md-editor 中点击“发布到微信”后，才会打开微信公众号发文页并自动填充
+    //
+    // 注意：这里不应自动打开微信公众号官方发文页面。
+    if (target.platform === 'wechat') {
+      await jobLogger({
+        level: 'info',
+        step: 'wechat',
+        message: '微信公众号：已切换到「先预览后发布」流程，打开微信 Markdown 编辑器',
+      });
+
+      try {
+        await ChromeStorageBridge.saveArticle({
+          id: processedPost.id || jobId,
+          title: processedPost.title || '未命名标题',
+          content: processedPost.body_md || '',
+          sourceUrl: (processedPost as any).source_url || undefined,
+          updatedAt: Date.now(),
+        });
+
+        const mdEditorBaseUrl = chrome.runtime.getURL('md-editor/md-editor.html');
+        const mdEditorUrl = `${mdEditorBaseUrl}?from=synccaster`;
+
+        try {
+          const allTabs = await chrome.tabs.query({});
+          const existing = (allTabs || []).find((t) => (t.url || '').startsWith(mdEditorBaseUrl));
+          if (existing?.id) {
+            await chrome.tabs.update(existing.id, { url: mdEditorUrl, active: true });
+          } else {
+            await chrome.tabs.create({ url: mdEditorUrl, active: true });
+          }
+        } catch {
+          // tabs 查询/更新失败时兜底：直接新开
+          await chrome.tabs.create({ url: mdEditorUrl, active: true });
+        }
+
+        await jobLogger({
+          level: 'info',
+          step: 'wechat',
+          message: '已打开微信 Markdown 编辑器：请在编辑器中预览排版并点击「发布到微信」继续',
+          meta: { url: mdEditorUrl },
+        });
+
+        return {
+          success: false,
+          error: '已打开微信 Markdown 编辑器，请在编辑器中点击「发布到微信」继续',
+          meta: { unconfirmed: true, currentUrl: mdEditorUrl, deferredToMdEditor: true },
+        };
+      } catch (e: any) {
+        await jobLogger({
+          level: 'error',
+          step: 'wechat',
+          message: '打开微信 Markdown 编辑器失败',
+          meta: { error: e?.message },
+        });
+        return { success: false, error: e?.message || '打开微信 Markdown 编辑器失败' };
+      }
+    }
+
+    // DOM 平台：尽早打开编辑页（改善“点击发布后等待很久才跳转”的体验）。
+    // 这里只负责打开/复用标签页，不执行注入脚本；后续 executeInOrigin 会复用该 tab。
+    const domAutomation =
+      adapter.kind === 'dom' ? ((adapter as any).dom as { matchers: string[]; fillAndPublish: Function; getEditorUrl?: (accountId?: string) => string | Promise<string> } | undefined) : undefined;
+    const domReuseKey = `${jobId}:${target.platform}:${target.accountId}`;
+    let domTargetUrl: string | undefined;
+    if (domAutomation) {
+      try {
+        if (domAutomation.getEditorUrl) {
+          const urlResult = domAutomation.getEditorUrl(target.accountId);
+          domTargetUrl = urlResult instanceof Promise ? await urlResult : urlResult;
+        } else {
+          domTargetUrl = toDomOpenUrl(domAutomation.matchers?.[0] || '');
+        }
+
+        if (domTargetUrl) {
+          await openOrReuseTab(domTargetUrl, { active: activeTab, reuseKey: domReuseKey });
+          await jobLogger({ level: 'info', step: 'dom', message: '已打开发布页面', meta: { url: domTargetUrl } });
+        }
+      } catch (e: any) {
+        console.warn('[publish-engine] Failed to pre-open DOM editor tab', e);
+        await jobLogger({ level: 'warn', step: 'dom', message: '打开发布页面失败，将继续尝试发布', meta: { error: e?.message } });
+      }
+    }
+
     const manifest = buildAssetManifest(processedPost);
     let strategy = getImageStrategy(target.platform);
 
@@ -139,10 +224,10 @@ export async function publishToTarget(
     const needsDownloadedImagesForDomFill =
       adapter.kind === 'dom' &&
       strategy?.mode === 'domPasteUpload' &&
-      (target.platform === 'aliyun' || target.platform === 'juejin');
+      (target.platform === 'aliyun' || target.platform === 'juejin' || target.platform === 'jianshu' || target.platform === 'tencent-cloud');
 
     const prefillBeforeImageProcessing =
-      adapter.kind === 'dom' && (target.platform === 'bilibili' || target.platform === 'csdn');
+      adapter.kind === 'dom' && (target.platform === 'bilibili' || target.platform === 'csdn' || target.platform === 'oschina');
 
     if (!prefillBeforeImageProcessing && manifest.images.length > 0 && strategy && strategy.mode !== 'externalUrlOnly') {
       await jobLogger({
@@ -242,7 +327,20 @@ export async function publishToTarget(
 
     // 转换内容
     await jobLogger({ level: 'info', step: 'transform', message: '转换内容以适配目标平台' });
-    const payload = await adapter.transform(processedPost as any, { config: target.config || {} });
+    let payload = await adapter.transform(processedPost as any, { config: target.config || {} });
+
+    // Rich-text only platforms: ensure we have HTML for paste/injection (doesn't affect Markdown platforms).
+    if (
+      adapter?.capabilities?.supportsMarkdown === false &&
+      adapter?.capabilities?.supportsHtml &&
+      !payload?.contentHtml &&
+      payload?.contentMarkdown
+    ) {
+      payload = {
+        ...payload,
+        contentHtml: renderMarkdownToHtmlForPaste(String(payload.contentMarkdown)),
+      };
+    }
 
     // 发布（根据 kind 路由）
     await jobLogger({ level: 'info', step: 'publish', message: `开始发布... (模式: ${adapter.kind})` });
@@ -252,65 +350,17 @@ export async function publishToTarget(
     if (adapter.kind === 'dom') {
       // DOM 自动化模式：直接走站内执行
       if ((adapter as any).dom) {
-        const dom = (adapter as any).dom as { matchers: string[]; fillAndPublish: Function; getEditorUrl?: Function };
+        const dom = (adapter as any).dom as { matchers: string[]; fillAndPublish: Function; getEditorUrl?: (accountId?: string) => string | Promise<string> };
         const reuseKey = `${jobId}:${target.platform}:${target.accountId}`;
         
-        // 获取目标 URL
+        // 获取目标 URL - 优先使用 getEditorUrl 动态生成（支持需要用户ID的平台）
         let targetUrl: string;
-        
-        // 微信公众号等平台需要动态获取编辑页面 URL
-        if (target.platform === 'wechat') {
-          // 微信公众号需要先在后台获取 token，再进入编辑页（复用同一个 tab，避免打开多个页面）
-          await jobLogger({ level: 'info', step: 'dom', message: '微信公众号：获取 token 并进入编辑页面' });
-          
-          try {
-            const homeUrl = 'https://mp.weixin.qq.com/';
-
-            const getTokenScript = async () => {
-              const urlParams = new URLSearchParams(window.location.search);
-              let token = urlParams.get('token');
-
-              if (!token) {
-                const scripts = document.querySelectorAll('script');
-                for (const script of scripts) {
-                  const match = script.textContent?.match(/token['":\\s]+['\"]?(\\d+)['\"]?/);
-                  if (match) {
-                    token = match[1];
-                    break;
-                  }
-                }
-              }
-
-              if (!token && (window as any).wx && (window as any).wx.cgiData) {
-                token = (window as any).wx.cgiData.token;
-              }
-
-              if (!token) {
-                try {
-                  const stored = localStorage.getItem('wx_token');
-                  if (stored) token = stored;
-                } catch {}
-              }
-
-              return token;
-            };
-
-            const token = await executeInOrigin(homeUrl, getTokenScript, [], {
-              closeTab: false,
-              active: activeTab,
-              reuseKey,
-            });
-
-            if (!token) {
-              throw new Error('无法获取微信公众号 token，请确保已登录');
-            }
-
-            targetUrl = buildWechatEditorUrl(String(token));
-            await jobLogger({ level: 'info', step: 'dom', message: `编辑页面 URL: ${targetUrl}` });
-          } catch (e: any) {
-            await jobLogger({ level: 'error', step: 'dom', message: '获取微信编辑页面失败，请确保已登录微信公众号', meta: { error: e?.message } });
-            throw new Error('获取微信编辑页面失败，请确保已登录微信公众号');
-          }
+        if (domTargetUrl) {
+          targetUrl = domTargetUrl;
+        } else if (dom.getEditorUrl) {
+          const urlResult = dom.getEditorUrl(target.accountId);
+          targetUrl = urlResult instanceof Promise ? await urlResult : urlResult;
+          console.log('[publish-engine] Using dynamic editor URL', { targetUrl, accountId: target.accountId });
         } else {
           targetUrl = toDomOpenUrl(dom.matchers?.[0] || '');
         }
@@ -429,6 +479,153 @@ export async function publishToTarget(
                };
 
                await executeInOrigin(targetUrl, applyMappingInEditor as any, [entries], {
+                 closeTab: false,
+                 active: false,
+                 reuseKey,
+               });
+
+               await jobLogger({
+                 level: 'info',
+                 step: 'upload_images',
+                 message: `图片处理完成: ${imageResult.stats.success}/${imageResult.stats.total} 成功`,
+                 meta: imageResult.stats,
+               });
+             } else {
+               await jobLogger({ level: 'warn', step: 'upload_images', message: '图片上传失败，将使用原始链接' });
+             }
+           } catch (imgError: any) {
+             console.error('[publish-engine] 图片处理失败', imgError);
+             await jobLogger({
+               level: 'warn',
+               step: 'upload_images',
+               message: '图片处理失败，将使用原始链接',
+               meta: { error: imgError?.message },
+             });
+           }
+         }
+
+         // OSChina：外链图片在预览/发布中经常不可用，优先让标题/正文快速填入，再在同一编辑页中上传并回写链接。
+         if (
+           prefillBeforeImageProcessing &&
+           target.platform === 'oschina' &&
+           manifest.images.length > 0 &&
+           strategy &&
+           strategy.mode !== 'externalUrlOnly'
+         ) {
+           await jobLogger({ level: 'info', step: 'upload_images', message: `发现 ${manifest.images.length} 张图片需要处理` });
+           try {
+             const tabInfo = await getReuseTabInfo(reuseKey);
+             const inTabUrl = tabInfo?.url || targetUrl;
+
+             const imageResult = await uploadImagesInPlatform(
+               manifest.images.map((img) => img.originalUrl),
+               target.platform,
+               strategy,
+               (progress) => {
+                 jobLogger({
+                   level: 'info',
+                   step: 'upload_images',
+                   message: `图片上传: ${progress.completed}/${progress.total}`,
+                   meta: { progress },
+                 });
+               },
+               { targetUrl: inTabUrl, reuseKey, closeTab: false, active: false }
+             );
+
+             if (imageResult.urlMapping.size > 0) {
+               const entries = Array.from(imageResult.urlMapping.entries());
+
+               const applyMappingInMarkdownEditor = async (pairs: [string, string][]) => {
+                 const replaceByPairs = (text: string) => {
+                   let out = text || '';
+                   const sorted = pairs.slice().sort((a, b) => b[0].length - a[0].length);
+                   for (const [from, to] of sorted) {
+                     if (!from || !to || from === to) continue;
+                     out = out.split(from).join(to);
+                   }
+                   return out;
+                 };
+
+                 const getAllDocs = (): Document[] => {
+                   const docs: Document[] = [document];
+                   const iframes = Array.from(document.querySelectorAll('iframe')) as HTMLIFrameElement[];
+                   for (const iframe of iframes) {
+                     try {
+                       const doc = iframe.contentDocument;
+                       if (doc) docs.push(doc);
+                     } catch {}
+                   }
+                   return docs;
+                 };
+
+                 const findCodeMirror = () => {
+                   for (const doc of getAllDocs()) {
+                     const els = Array.from(doc.querySelectorAll('.CodeMirror')) as any[];
+                     for (const el of els) {
+                       const cm = el?.CodeMirror;
+                       if (cm?.getValue && cm?.setValue) return { cm, el: el as HTMLElement };
+                     }
+                   }
+                   return null;
+                 };
+
+                 const findTextarea = () => {
+                   for (const doc of getAllDocs()) {
+                     const tas = Array.from(doc.querySelectorAll('textarea')) as HTMLTextAreaElement[];
+                     const candidates = tas.filter((ta) => {
+                       const attrs = [
+                         ta.getAttribute('placeholder') || '',
+                         ta.getAttribute('aria-label') || '',
+                         ta.getAttribute('name') || '',
+                         ta.id || '',
+                         ta.className || '',
+                       ]
+                         .join(' ')
+                         .toLowerCase();
+                       return !/title|标题/i.test(attrs);
+                     });
+                     if (candidates.length > 0) return candidates[0];
+                   }
+                   return null;
+                 };
+
+                 const cmFound = findCodeMirror();
+                 if (cmFound) {
+                   const cm = cmFound.cm;
+                   const current = String(cm.getValue?.() ?? '');
+                   const next = replaceByPairs(current);
+                   if (next !== current) {
+                     const doc = cm.getDoc?.() || null;
+                     const cursor = doc?.getCursor?.() || null;
+                     cm.setValue(next);
+                     try { cm.refresh?.(); } catch {}
+                     try {
+                       if (cursor && doc?.setCursor) doc.setCursor(cursor);
+                     } catch {}
+                   }
+                   try {
+                     const ta = (cmFound.el as any).querySelector?.('textarea') as HTMLTextAreaElement | null;
+                     ta?.dispatchEvent(new Event('input', { bubbles: true }));
+                   } catch {}
+                   return { ok: true, method: 'codemirror' };
+                 }
+
+                 const ta = findTextarea();
+                 if (ta) {
+                   const current = String(ta.value || '');
+                   const next = replaceByPairs(current);
+                   if (next !== current) {
+                     ta.value = next;
+                     ta.dispatchEvent(new Event('input', { bubbles: true }));
+                     ta.dispatchEvent(new Event('change', { bubbles: true }));
+                   }
+                   return { ok: true, method: 'textarea' };
+                 }
+
+                 return { ok: false, reason: 'editor_not_found' };
+               };
+
+               await executeInOrigin(inTabUrl, applyMappingInMarkdownEditor as any, [entries], {
                  closeTab: false,
                  active: false,
                  reuseKey,
@@ -635,7 +832,8 @@ const PLATFORM_URLS: Record<string, string> = {
   segmentfault: 'https://segmentfault.com/',
   // 避免先打开首页再跳转编辑页（用户可见跳转/延迟）；图片上传与发文都可在专栏编辑页完成
   bilibili: 'https://member.bilibili.com/platform/upload/text/edit',
-  oschina: 'https://www.oschina.net/',
+  // 开源中国发文页面
+  oschina: 'https://my.oschina.net/blog/write',
 };
 
 function toDomOpenUrl(matcherOrUrl: string) {
@@ -657,15 +855,17 @@ async function uploadImagesInPlatform(
   imageUrls: string[],
   platformId: string,
   strategy: any,
-  onProgress?: (progress: { completed: number; total: number }) => void
+  onProgress?: (progress: { completed: number; total: number }) => void,
+  opts: { targetUrl?: string; reuseKey?: string; closeTab?: boolean; active?: boolean } = {}
 ): Promise<{
   urlMapping: Map<string, string>;
   stats: { total: number; success: number; failed: number };
 }> {
   const targetUrl =
-    strategy?.mode === 'domPasteUpload' && strategy.domPasteConfig?.editorUrl
+    opts.targetUrl ||
+    (strategy?.mode === 'domPasteUpload' && strategy.domPasteConfig?.editorUrl
       ? strategy.domPasteConfig.editorUrl
-      : PLATFORM_URLS[platformId];
+      : PLATFORM_URLS[platformId]);
 
   if (!targetUrl) {
     console.log(`[publish-engine] 未知平台 ${platformId}，跳过图片上传`);
@@ -895,6 +1095,15 @@ async function uploadImagesInPlatform(
           }
           if (!newUrl) newUrl = findUrlInObject(data);
           if (!newUrl) throw new Error('无法解析图片 URL');
+
+          // 规范化 URL（兼容 `//host/path` 与 `/path`）
+          try {
+            if (newUrl.startsWith('//')) newUrl = 'https:' + newUrl;
+            else if (newUrl.startsWith('/')) {
+              const origin = new URL(String(strategy.uploadUrl)).origin;
+              newUrl = origin + newUrl;
+            }
+          } catch {}
 
           urlMapping.set(img.url, newUrl);
           success++;
@@ -1363,6 +1572,10 @@ async function uploadImagesInPlatform(
           throw new Error('无法从响应中解析图片 URL: ' + JSON.stringify(data).substring(0, 200));
         }
 
+        // 规范化 URL（兼容 `//host/path` 与 `/path`）
+        if (newUrl.startsWith('//')) newUrl = 'https:' + newUrl;
+        else if (newUrl.startsWith('/')) newUrl = location.origin + newUrl;
+
         results.push({ originalUrl: img.url, newUrl, success: true });
       } catch (error: any) {
         console.error('[image-upload] 上传失败:', img.url, error);
@@ -1381,7 +1594,7 @@ async function uploadImagesInPlatform(
       targetUrl,
       uploadFunction,
       [downloadedImages, serializableStrategy],
-      { closeTab: true, active: false }
+      { closeTab: opts.closeTab ?? true, active: opts.active ?? false, reuseKey: opts.reuseKey }
     );
 
     const urlMapping = new Map<string, string>();
@@ -1483,7 +1696,22 @@ function buildAssetManifest(post: CanonicalPost): AssetManifest {
     const mdImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
     let match;
     while ((match = mdImageRegex.exec(post.body_md)) !== null) {
-      const url = (match[2] || '').trim();
+      // 兼容 Markdown 标准语法：`![](<url> "title")` / `![](url "title")`
+      let inner = String(match[2] || '').trim();
+
+      // 分离可选 title（通常以引号开始），避免把 title 里的空格也当作 URL 的一部分
+      const quoteIdx = inner.search(/["']/);
+      if (quoteIdx > 0) {
+        inner = inner.slice(0, quoteIdx).trimEnd();
+      }
+
+      // 支持 ![](<url>) 写法：去掉包裹的尖括号
+      if (inner.startsWith('<') && inner.endsWith('>')) {
+        inner = inner.slice(1, -1);
+      }
+
+      // 去除 URL 中可能混入的空格/换行（如 `. jpeg`）
+      const url = inner.replace(/\s+/g, '');
       if (url && !seen.has(url) && isExternalImage(url)) {
         seen.add(url);
         images.push({

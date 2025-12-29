@@ -207,6 +207,38 @@ const leftPaneWidth = ref(50);
 const isResizingHeight = ref(false);
 const isResizingWidth = ref(false);
 
+// 尺寸记忆 - 存储键
+const STORAGE_KEY_HEIGHT = 'synccaster_editor_height';
+const STORAGE_KEY_WIDTH = 'synccaster_editor_width';
+
+// 加载保存的尺寸
+function loadSavedDimensions() {
+  try {
+    const savedHeight = localStorage.getItem(STORAGE_KEY_HEIGHT);
+    const savedWidth = localStorage.getItem(STORAGE_KEY_WIDTH);
+    if (savedHeight) {
+      const h = parseInt(savedHeight, 10);
+      if (!isNaN(h) && h >= 200 && h <= 700) {
+        editorHeight.value = h;
+      }
+    }
+    if (savedWidth) {
+      const w = parseFloat(savedWidth);
+      if (!isNaN(w) && w >= 25 && w <= 75) {
+        leftPaneWidth.value = w;
+      }
+    }
+  } catch {}
+}
+
+// 保存尺寸到 localStorage
+function saveDimensions() {
+  try {
+    localStorage.setItem(STORAGE_KEY_HEIGHT, String(editorHeight.value));
+    localStorage.setItem(STORAGE_KEY_WIDTH, String(leftPaneWidth.value));
+  } catch {}
+}
+
 // 高度拖拽
 function startResizeHeight(e: MouseEvent) {
   e.preventDefault();
@@ -223,6 +255,8 @@ function startResizeHeight(e: MouseEvent) {
     isResizingHeight.value = false;
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    // 保存尺寸
+    saveDimensions();
   };
   
   document.addEventListener('mousemove', onMove);
@@ -248,6 +282,8 @@ function startResizeWidth(e: MouseEvent) {
     isResizingWidth.value = false;
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    // 保存尺寸
+    saveDimensions();
   };
   
   document.addEventListener('mousemove', onMove);
@@ -322,11 +358,44 @@ watch(previewHtml, async () => {
 function showCopySuccess(msg: string = '已复制到剪贴板') {
   copyTipMessage.value = msg;
   showCopyTip.value = true;
-  setTimeout(() => { showCopyTip.value = false; }, 2000);
+  setTimeout(() => { showCopyTip.value = false; }, 1000);
+}
+
+function copyWithExecCommand(text: string): boolean {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'true');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+async function copyPlainText(text: string): Promise<boolean> {
+  const v = String(text ?? '');
+  if (!v) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(v);
+      return true;
+    }
+  } catch {}
+  return copyWithExecCommand(v);
 }
 
 async function copyText(text: string, label: string = '内容') {
-  try { await navigator.clipboard.writeText(text); showCopySuccess(`已复制${label}`); } catch {}
+  const ok = await copyPlainText(text);
+  if (ok) showCopySuccess(`已复制${label}`);
+  else showValidationError('复制失败：请检查浏览器剪贴板权限');
 }
 
 function stripHtmlToText(html: string): string {
@@ -336,17 +405,24 @@ function stripHtmlToText(html: string): string {
 }
 
 async function copyPreview() {
-  const contentHtml = previewHtml.value || '';
-  const fullHtml = `<h1>${title.value || '未命名标题'}</h1>${contentHtml}`;
-  const plain = stripHtmlToText(fullHtml);
+  const container = previewRef.value?.querySelector('.markdown-preview') as HTMLElement | null;
+  const bodyHtml = container?.innerHTML ?? (previewHtml.value || '');
+  const plain = stripHtmlToText(bodyHtml);
   try {
-    await navigator.clipboard.write([new ClipboardItem({
-      'text/html': new Blob([fullHtml], { type: 'text/html' }),
-      'text/plain': new Blob([plain], { type: 'text/plain' }),
-    })]);
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+      throw new Error('clipboard_write_unavailable');
+    }
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/html': new Blob([bodyHtml], { type: 'text/html' }),
+        'text/plain': new Blob([plain], { type: 'text/plain' }),
+      }),
+    ]);
     showCopySuccess('已复制预览内容');
   } catch {
-    try { await navigator.clipboard.writeText(plain); showCopySuccess('已复制预览内容'); } catch {}
+    const ok = await copyPlainText(plain);
+    if (ok) showCopySuccess('已复制预览内容');
+    else showValidationError('复制失败：请检查浏览器剪贴板权限');
   }
 }
 
@@ -392,7 +468,7 @@ const validationTipMessage = ref('');
 function showValidationError(msg: string) {
   validationTipMessage.value = msg;
   showValidationTip.value = true;
-  setTimeout(() => { showValidationTip.value = false; }, 2000);
+  setTimeout(() => { showValidationTip.value = false; }, 1500);
 }
 
 async function save() {
@@ -508,6 +584,22 @@ async function confirmPublish() {
     });
     const platformName = (p: string) => ({ juejin: '掘金', csdn: 'CSDN', zhihu: '知乎', wechat: '微信公众号', jianshu: '简书', cnblogs: '博客园', '51cto': '51CTO', 'tencent-cloud': '腾讯云', aliyun: '阿里云', segmentfault: 'SegmentFault', bilibili: 'B站专栏', oschina: '开源中国' } as Record<string, string>)[p] || p;
     const platformListText = Array.from(new Set(targets.map(t => t.platform))).map(platformName).join('、');
+    
+    // 检查是否包含微信公众号
+    const hasWechat = targets.some(t => t.platform === 'wechat');
+    if (hasWechat) {
+      // 微信公众号发布：内容会自动通过内置排版逻辑转换，并使用官方 API 填充到编辑器
+      // 保存文章到 Chrome Storage，供 md-editor 读取（如果用户需要手动调整排版）
+      await ChromeStorageBridge.saveArticle({ 
+        id: id.value, 
+        title: title.value || '未命名标题', 
+        content: body.value || '', 
+        sourceUrl: sourceUrl.value || undefined, 
+        updatedAt: Date.now() 
+      });
+      message.info('微信公众号：内容将自动转换为公众号格式并填充到编辑器', { duration: 3000 });
+    }
+    
     const jobId = crypto.randomUUID();
     const now = Date.now();
     await db.jobs.add({ id: jobId, postId: id.value, targets, state: 'PENDING', progress: 0, attempts: 0, maxAttempts: 3, logs: [{ id: crypto.randomUUID(), level: 'info', step: 'create', message: `创建发布任务，目标平台：${platformListText}`, timestamp: now }], createdAt: now, updatedAt: now });
@@ -544,7 +636,7 @@ function setupStorageListener() {
   } catch {}
 }
 
-onMounted(() => { load(); document.addEventListener('visibilitychange', handleVisibilityChange); window.addEventListener('beforeunload', handleBeforeUnload); setupStorageListener(); });
+onMounted(() => { loadSavedDimensions(); load(); document.addEventListener('visibilitychange', handleVisibilityChange); window.addEventListener('beforeunload', handleBeforeUnload); setupStorageListener(); });
 onUnmounted(() => { document.removeEventListener('visibilitychange', handleVisibilityChange); window.removeEventListener('beforeunload', handleBeforeUnload); if (unsubscribeStorageChange) unsubscribeStorageChange(); if (rafId) cancelAnimationFrame(rafId); });
 </script>
 
@@ -632,9 +724,15 @@ onUnmounted(() => { document.removeEventListener('visibilitychange', handleVisib
 .image-preview-modal img { max-width: 90vw; max-height: 85vh; border-radius: 8px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4); }
 .image-caption { text-align: center; color: white; margin-top: 12px; font-size: 14px; }
 
-.toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px; border-radius: 8px; font-size: 13px; z-index: 10000; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+.toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); padding: 6px 10px; border-radius: 999px; font-size: 12px; z-index: 10000; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); pointer-events: none; animation: toastFade 1s ease-out forwards; }
 .toast-success { background: #10b981; color: white; }
-.toast-warning { background: #f59e0b; color: white; }
+.toast-warning { top: 44px; background: #f59e0b; color: white; }
+
+@keyframes toastFade {
+  0% { opacity: 0; transform: translate(-50%, -6px); }
+  10% { opacity: 0.98; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -8px); }
+}
 
 .publish-dialog { background: white; border-radius: 16px; width: 100%; max-width: 500px; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column; }
 .dialog-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #e5e7eb; }

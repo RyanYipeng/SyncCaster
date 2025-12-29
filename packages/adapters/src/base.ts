@@ -53,11 +53,13 @@ export interface PlatformPayload {
   content?: string;
   contentHtml?: string;
   contentMarkdown?: string;
+  contentCss?: string;
   cover?: AssetRef;
   tags?: string[];
   categories?: string[];
   summary?: string;
   canonicalUrl?: string;
+  author?: string;
   meta?: Record<string, any>;
 }
 
@@ -88,6 +90,8 @@ export interface PublishResult {
  */
 export interface DOMAutomation {
   matchers: string[];
+  /** 动态获取编辑器 URL（支持需要用户ID的平台） */
+  getEditorUrl?: (accountId?: string) => string | Promise<string>;
   fillAndPublish: (
     payload: PlatformPayload,
     options?: any

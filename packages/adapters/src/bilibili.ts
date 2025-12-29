@@ -4,9 +4,16 @@ import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
 /**
  * 哔哩哔哩专栏（Quill 富文本）
  *
- * 关键点：
- * - 不可靠的“Markdown 直接粘贴” -> 先将 Markdown 渲染为 HTML，再写入 Quill
- * - 图片：由 publish-engine 在站内粘贴上传，获得可发布的 URL 后替换进正文（避免 data URL 导致“图片内容异常”）
+ * 平台特点：
+ * - 入口：https://member.bilibili.com/platform/upload/text/edit
+ * - 编辑器：Quill 富文本编辑器，不支持 Markdown 识别
+ * - 支持：HTML/富文本内容粘贴
+ * - 图片：由 publish-engine 在站内粘贴上传，获得可发布的 URL 后替换进正文
+ * 
+ * 发布策略：
+ * - 将 Markdown 转换为富文本 HTML 后注入编辑器
+ * - 保留原有排版与样式（标题、段落、列表、引用、代码块等）
+ * - 不执行最终发布操作，由用户手动完成
  */
 export const bilibiliAdapter: PlatformAdapter = {
   id: 'bilibili',
@@ -15,7 +22,7 @@ export const bilibiliAdapter: PlatformAdapter = {
   icon: 'bilibili',
   capabilities: {
     domAutomation: true,
-    supportsMarkdown: false,
+    supportsMarkdown: false, // B 站专栏不支持 Markdown 识别
     supportsHtml: true,
     supportsTags: true,
     supportsCategories: true,
@@ -30,16 +37,21 @@ export const bilibiliAdapter: PlatformAdapter = {
   },
 
   async transform(post) {
-    // B 站专栏通常不支持 LaTeX 渲染：去掉 `$` 包裹，保留表达式
+    // B 站专栏不支持 Markdown 识别，必须转换为富文本 HTML
+    // 转换结果基于实时预览的渲染结构，尽可能保留原有排版与样式
     let markdown = post.body_md || '';
+    
+    // B 站专栏通常不支持 LaTeX 渲染：去掉 $ 包裹，保留表达式
     markdown = markdown.replace(/\$([^$\n]+)\$/g, '$1');
     markdown = markdown.replace(/\$\$([\s\S]+?)\$\$/g, '\n$1\n');
 
+    // 将 Markdown 转换为富文本 HTML
     const contentHtml = renderMarkdownToHtmlForPaste(markdown);
+    
     return {
       title: post.title,
-      contentMarkdown: markdown,
-      contentHtml,
+      contentMarkdown: markdown, // 保留原始 Markdown（用于调试）
+      contentHtml, // 必须使用转换后的 HTML
       tags: post.tags,
       categories: post.categories,
       cover: post.cover,
@@ -131,11 +143,16 @@ export const bilibiliAdapter: PlatformAdapter = {
         );
       };
 
+
+      /**
+       * 将 HTML 规范化为 Quill 可识别的格式
+       * 保留原有排版与样式：标题层级、段落换行、加粗斜体、列表、引用、代码块等
+       */
       const normalizeHtmlForQuill = (html: string): string => {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html || '', 'text/html');
 
-        // 代码块：尽量转换为 Quill 的 `ql-syntax`（若语法模块存在可直接识别；否则仍是可读的 <pre>）
+        // 代码块：转换为 Quill 的 `ql-syntax` 格式
         doc.querySelectorAll('pre').forEach((pre) => {
           const code = pre.querySelector('code');
           const text = (code?.textContent || pre.textContent || '').replace(/\r\n/g, '\n');
@@ -159,7 +176,7 @@ export const bilibiliAdapter: PlatformAdapter = {
           pre.replaceWith(out);
         });
 
-        // 行内 code：保留 <code> 标签，并补充基础样式（Quill 支持 inline code 时可直接识别）
+        // 行内 code：保留 <code> 标签，补充基础样式
         doc.querySelectorAll('code').forEach((code) => {
           if (code.closest('pre')) return;
           const el = code as HTMLElement;
@@ -170,7 +187,7 @@ export const bilibiliAdapter: PlatformAdapter = {
           el.style.padding = '2px 4px';
         });
 
-        // 引用：Quill 通常会扁平化 blockquote 嵌套；这里将 blockquote 转成 div + 样式，尽量保留多级嵌套的视觉结构
+        // 引用：将 blockquote 转成 div + 样式，保留多级嵌套的视觉结构
         const allBlockquotes = Array.from(doc.querySelectorAll('blockquote')) as HTMLElement[];
         allBlockquotes.reverse();
         for (const bq of allBlockquotes) {
@@ -192,7 +209,7 @@ export const bilibiliAdapter: PlatformAdapter = {
           bq.replaceWith(wrapper);
         }
 
-        // 表格：不再降级为文本，让 Quill 尝试直接粘贴为表格（若平台不支持则保持 HTML/样式退化）
+        // 表格：添加基础样式
         doc.querySelectorAll('table').forEach((table) => {
           (table as HTMLElement).style.borderCollapse = 'collapse';
           (table as HTMLElement).style.width = '100%';
@@ -208,18 +225,6 @@ export const bilibiliAdapter: PlatformAdapter = {
         // 去掉潜在的脚本/样式，避免被编辑器过滤导致异常
         doc.querySelectorAll('script, style').forEach((el) => el.remove());
         return doc.body.innerHTML;
-      };
-
-      // 图片上传由 publish-engine 负责（先转成平台可发布 URL，再替换进正文）。
-
-      const replaceByMap = (text: string, map: Map<string, string>): string => {
-        let out = text || '';
-        const entries = Array.from(map.entries()).sort((a, b) => b[0].length - a[0].length);
-        for (const [from, to] of entries) {
-          if (!from || !to || from === to) continue;
-          out = out.split(from).join(to);
-        }
-        return out;
       };
 
       const pasteHtml = async (editor: HTMLElement, quill: any | null, html: string, fallbackText: string) => {
@@ -290,7 +295,10 @@ export const bilibiliAdapter: PlatformAdapter = {
       };
 
       try {
-        // 1) 定位标题与编辑器（B站常见：标题 textarea，正文 .ql-editor 在 iframe 内）
+        console.log('[bilibili] fillAndPublish starting');
+        console.log('[bilibili] ⚠️ B 站专栏不支持 Markdown，将使用富文本 HTML 填充');
+        
+        // 1) 定位标题与编辑器
         const titleField = await waitForAny(
           [
             'textarea[placeholder*="标题"]',
@@ -314,25 +322,47 @@ export const bilibiliAdapter: PlatformAdapter = {
           titleField.textContent = title;
           titleField.dispatchEvent(new Event('input', { bubbles: true }));
         }
+        console.log('[bilibili] Title filled:', title);
 
+        // 3) 获取富文本 HTML 内容（必须使用 HTML，禁止直接填充 Markdown）
         let html = String((payload as any).contentHtml || '');
-        let text = String((payload as any).contentMarkdown || '');
+        const markdownOriginal = String((payload as any).contentMarkdown || '');
+        
+        // 如果没有 HTML 但有 Markdown，说明 transform 阶段可能出错，这里做兜底转换
+        if (!html && markdownOriginal) {
+          console.warn('[bilibili] contentHtml is empty, falling back to basic conversion');
+          html = `<p>${markdownOriginal.replace(/\n/g, '</p><p>')}</p>`;
+        }
+        
+        if (!html) {
+          throw new Error('无法获取富文本内容，B 站专栏不支持直接填充 Markdown');
+        }
 
         // 4) 正文写入（HTML -> Quill）
+        console.log('[bilibili] Filling content with HTML (length:', html.length, ')');
         const normalizedHtml = normalizeHtmlForQuill(html);
-        const fallbackText = text || '';
+        const fallbackText = markdownOriginal || '';
         await pasteHtml(editor, quill, normalizedHtml, fallbackText);
         await sleep(500);
-        // 简单校验：避免 paste 发生截断（常见于极大 HTML / data URL）
+        
+        // 简单校验：避免 paste 发生截断
         const expected = (fallbackText || '').trim().length;
         const actual = ((editor.innerText || editor.textContent || '').trim() || '').length;
         if (expected > 0 && actual > 0 && actual < expected * 0.85) {
-          // 尝试重试一次（Quill 有时首次粘贴未完整）
+          console.log('[bilibili] Content may be truncated, retrying paste...');
           await pasteHtml(editor, quill, normalizedHtml, fallbackText);
         }
 
-        return { url: window.location.href };
+        // 5) 内容填充完成，不执行发布操作
+        console.log('[bilibili] Content fill completed');
+        console.log('[bilibili] ⚠️ 发布操作需要用户手动完成');
+
+        return { 
+          url: window.location.href,
+          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+        };
       } catch (error: any) {
+        console.error('[bilibili] Fill failed:', error);
         return {
           url: window.location.href,
           __synccasterError: {

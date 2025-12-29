@@ -4,9 +4,15 @@ import { renderMarkdownToHtmlForPaste } from '@synccaster/core';
 /**
  * CSDN（新版创作中心）
  *
- * 目标：
- * - 打开编辑页后自动填充标题与正文
- * - 兼容 Markdown（CodeMirror/Monaco）与富文本（contenteditable/ProseMirror/Quill）
+ * 平台特点：
+ * - 入口：https://editor.csdn.net/md/?not_checkout=1
+ * - 编辑器：Markdown 编辑器（CodeMirror/Monaco）或富文本编辑器
+ * - 支持：Markdown 语法
+ * - 结构：标题输入框 + 正文编辑器
+ * 
+ * 发布策略：
+ * - 直接填充 Markdown 原文到编辑器
+ * - 不执行最终发布操作，由用户手动完成
  */
 export const csdnAdapter: PlatformAdapter = {
   id: 'csdn',
@@ -179,13 +185,17 @@ export const csdnAdapter: PlatformAdapter = {
       };
 
       const tryFillCodeMirror5 = (markdown: string): boolean => {
+        console.log('[csdn-fill] Trying CodeMirror 5...');
         const cmEls = queryAllDeep('.CodeMirror').filter(isVisible) as any[];
+        console.log('[csdn-fill] Found .CodeMirror elements:', cmEls.length);
         for (const cmEl of cmEls) {
           const cm = cmEl?.CodeMirror;
           if (cm?.setValue) {
+            console.log('[csdn-fill] CodeMirror 5 instance found, setting value');
+            // 先清空原有内容，再设置新内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+            cm.setValue('');
             cm.setValue(markdown);
             cm.refresh?.();
-            // Some implementations only mark dirty after an input/change event
             try {
               const ta = cmEl.querySelector?.('textarea') as HTMLTextAreaElement | null;
               ta?.dispatchEvent(new Event('input', { bubbles: true }));
@@ -198,23 +208,29 @@ export const csdnAdapter: PlatformAdapter = {
       };
 
       const tryFillMonaco = (markdown: string): boolean => {
+        console.log('[csdn-fill] Trying Monaco...');
         const monacoRoot = queryAllDeep('.monaco-editor').find(isVisible) as HTMLElement | undefined;
+        console.log('[csdn-fill] Found .monaco-editor:', !!monacoRoot);
         if (!monacoRoot) return false;
         try {
           const monaco = (window as any).monaco;
           const models = monaco?.editor?.getModels?.() as any[] | undefined;
           if (models?.length) {
-            for (const m of models) m?.setValue?.(markdown);
+            console.log('[csdn-fill] Monaco models found:', models.length);
+            // 先清空原有内容，再设置新内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+            for (const m of models) {
+              m?.setValue?.('');
+              m?.setValue?.(markdown);
+            }
             return true;
           }
-        } catch {
-          // ignore and fallback
-        }
+        } catch {}
 
-        // DOM 兜底：部分页面会隐藏 monaco 对象，但仍有可写入的 textarea
         try {
           const ta = monacoRoot.querySelector('textarea.inputarea, textarea') as HTMLTextAreaElement | null;
           if (!ta) return false;
+          // 先清空再设置
+          setNativeValue(ta, '');
           setNativeValue(ta, markdown);
           return true;
         } catch {
@@ -223,24 +239,90 @@ export const csdnAdapter: PlatformAdapter = {
       };
 
       const tryFillCodeMirror6 = async (markdown: string): Promise<boolean> => {
+        console.log('[csdn-fill] Trying CodeMirror 6...');
         const cm6 = queryAllDeep('.cm-content[contenteditable="true"], .cm-editor .cm-content')
           .map((e) => e as HTMLElement)
           .find(isVisible);
+        console.log('[csdn-fill] Found .cm-content:', !!cm6);
         if (!cm6) return false;
+        
         try {
           const cmEditor = cm6.closest('.cm-editor') as any;
-          const view = cmEditor?.cmView?.view;
+          console.log('[csdn-fill] Found .cm-editor:', !!cmEditor);
+          
+          let view: any = null;
+          
+          if (cmEditor?.cmView?.view) {
+            view = cmEditor.cmView.view;
+            console.log('[csdn-fill] Found view via cmView.view');
+          }
+          
+          if (!view && cmEditor) {
+            for (const key of Object.keys(cmEditor)) {
+              const val = cmEditor[key];
+              if (val && typeof val === 'object' && val.dispatch && val.state?.doc) {
+                view = val;
+                console.log('[csdn-fill] Found view via key:', key);
+                break;
+              }
+            }
+          }
+          
+          if (!view && cmEditor) {
+            const symbols = Object.getOwnPropertySymbols(cmEditor);
+            for (const sym of symbols) {
+              const val = cmEditor[sym];
+              if (val && typeof val === 'object' && val.dispatch && val.state?.doc) {
+                view = val;
+                console.log('[csdn-fill] Found view via Symbol');
+                break;
+              }
+            }
+          }
+          
+          if (!view && cm6) {
+            for (const key of Object.keys(cm6)) {
+              const val = (cm6 as any)[key];
+              if (val && typeof val === 'object' && val.dispatch && val.state?.doc) {
+                view = val;
+                console.log('[csdn-fill] Found view via cm6 key:', key);
+                break;
+              }
+            }
+          }
+          
+          if (!view) {
+            const win = cm6.ownerDocument?.defaultView || window;
+            const globalKeys = ['editorView', 'editor', 'cmView', 'markdownEditor'];
+            for (const key of globalKeys) {
+              const val = (win as any)[key];
+              if (val && typeof val === 'object' && val.dispatch && val.state?.doc) {
+                view = val;
+                console.log('[csdn-fill] Found view via window.' + key);
+                break;
+              }
+            }
+          }
+          
           if (view?.dispatch && view?.state?.doc) {
+            console.log('[csdn-fill] Dispatching to CodeMirror 6 view');
+            // 先清空原有内容，再设置新内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+            // 使用 from: 0, to: doc.length 替换全部内容
             view.dispatch({
               changes: { from: 0, to: view.state.doc.length, insert: markdown },
             });
             return true;
           }
 
-          // DOM 回退（尽量触发输入事件）
+          // DOM 回退：模拟粘贴纯文本
+          console.log('[csdn-fill] No CM6 view found, trying paste simulation');
           cm6.focus();
+          await sleep(100);
+          
           const doc = cm6.ownerDocument;
           const win = doc.defaultView || window;
+          
+          // 选中所有内容
           const sel = win.getSelection();
           if (sel) {
             sel.removeAllRanges();
@@ -248,26 +330,160 @@ export const csdnAdapter: PlatformAdapter = {
             range.selectNodeContents(cm6);
             sel.addRange(range);
           }
-          const ok = doc.execCommand?.('insertText', false, markdown);
-          if (!ok) cm6.textContent = markdown;
+          
+          // 模拟粘贴事件（纯文本）
+          try {
+            const DT = (win as any).DataTransfer || (globalThis as any).DataTransfer;
+            const dt = new DT();
+            dt.setData('text/plain', markdown);
+            const CE = (win as any).ClipboardEvent || (globalThis as any).ClipboardEvent;
+            const pasteEvt = new CE('paste', { bubbles: true, cancelable: true } as any);
+            Object.defineProperty(pasteEvt, 'clipboardData', { get: () => dt });
+            cm6.dispatchEvent(pasteEvt);
+            await sleep(300);
+            
+            // 检查是否成功
+            if (cm6.textContent && cm6.textContent.includes(markdown.substring(0, 20))) {
+              console.log('[csdn-fill] Paste simulation worked');
+              return true;
+            }
+          } catch (e) {
+            console.log('[csdn-fill] Paste simulation failed:', e);
+          }
+          
+          // 尝试 execCommand insertText
+          try {
+            sel?.removeAllRanges();
+            const range2 = doc.createRange();
+            range2.selectNodeContents(cm6);
+            sel?.addRange(range2);
+            
+            const ok = doc.execCommand?.('insertText', false, markdown);
+            if (ok) {
+              cm6.dispatchEvent(new Event('input', { bubbles: true }));
+              await sleep(100);
+              console.log('[csdn-fill] execCommand insertText worked');
+              return true;
+            }
+          } catch {}
+          
+          // 最后尝试：逐行插入（保持换行）
+          console.log('[csdn-fill] Trying line-by-line insertion');
+          cm6.innerHTML = '';
+          const lines = markdown.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const lineDiv = doc.createElement('div');
+            lineDiv.className = 'cm-line';
+            lineDiv.textContent = line || '\u200B'; // 空行用零宽空格
+            cm6.appendChild(lineDiv);
+          }
           cm6.dispatchEvent(new Event('input', { bubbles: true }));
           cm6.dispatchEvent(new Event('change', { bubbles: true }));
           await sleep(200);
+          console.log('[csdn-fill] Line-by-line insertion done');
           return true;
-        } catch {
+        } catch (e) {
+          console.log('[csdn-fill] CM6 error:', e);
           return false;
         }
       };
 
       const tryFillTextarea = (markdown: string): boolean => {
+        console.log('[csdn-fill] Trying textarea...');
         const tas = queryAllDeep('textarea')
           .map((e) => e as HTMLTextAreaElement)
           .filter((e) => isVisible(e) && !isLikelyTitle(e));
+        console.log('[csdn-fill] Found textareas:', tas.length);
         if (!tas.length) return false;
         tas.sort((a, b) => getRectArea(b) - getRectArea(a));
         const ta = tas[0];
+        console.log('[csdn-fill] Using textarea:', ta.className, getRectArea(ta));
+        // 先清空原有内容，再设置新内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+        setNativeValue(ta, '');
         setNativeValue(ta, markdown);
         return true;
+      };
+
+      const tryFillContentEditable = async (markdown: string): Promise<boolean> => {
+        console.log('[csdn-fill] Trying contenteditable fallback...');
+        const editables = queryAllDeep('[contenteditable="true"]')
+          .map((e) => e as HTMLElement)
+          .filter((e) => isVisible(e) && !isLikelyTitle(e) && getRectArea(e) > 10000);
+        
+        console.log('[csdn-fill] Found contenteditable elements:', editables.length);
+        if (editables.length === 0) return false;
+        
+        editables.sort((a, b) => getRectArea(b) - getRectArea(a));
+        const target = editables[0];
+        console.log('[csdn-fill] Using contenteditable:', target.className, getRectArea(target));
+        
+        const doc = target.ownerDocument;
+        const win = doc.defaultView || window;
+        
+        // 先清空原有内容（解决 CSDN 自动保存草稿导致内容混乱的问题）
+        target.innerHTML = '';
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(100);
+        
+        target.focus();
+        await sleep(100);
+        
+        // 选中所有内容
+        const sel = win.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          const range = doc.createRange();
+          range.selectNodeContents(target);
+          sel.addRange(range);
+        }
+        
+        // 方式1：模拟粘贴纯文本
+        try {
+          const DT = (win as any).DataTransfer || (globalThis as any).DataTransfer;
+          const dt = new DT();
+          dt.setData('text/plain', markdown);
+          const CE = (win as any).ClipboardEvent || (globalThis as any).ClipboardEvent;
+          const pasteEvt = new CE('paste', { bubbles: true, cancelable: true } as any);
+          Object.defineProperty(pasteEvt, 'clipboardData', { get: () => dt });
+          target.dispatchEvent(pasteEvt);
+          await sleep(300);
+          
+          if (target.textContent && target.textContent.includes(markdown.substring(0, 20))) {
+            console.log('[csdn-fill] Paste worked for contenteditable');
+            return true;
+          }
+        } catch {}
+        
+        // 方式2：execCommand insertText
+        try {
+          sel?.removeAllRanges();
+          const range2 = doc.createRange();
+          range2.selectNodeContents(target);
+          sel?.addRange(range2);
+          
+          const ok = doc.execCommand?.('insertText', false, markdown);
+          if (ok) {
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+            await sleep(100);
+            console.log('[csdn-fill] execCommand worked for contenteditable');
+            return true;
+          }
+        } catch {}
+        
+        // 方式3：逐行插入
+        target.innerHTML = '';
+        const lines = markdown.split('\n');
+        for (const line of lines) {
+          const div = doc.createElement('div');
+          div.textContent = line || '\u200B';
+          target.appendChild(div);
+        }
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        target.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(200);
+        
+        return target.textContent ? target.textContent.length > 10 : false;
       };
 
       const findBestRichEditor = (): HTMLElement | null => {
@@ -311,7 +527,6 @@ export const csdnAdapter: PlatformAdapter = {
         const doc = editor.ownerDocument;
         const win = doc.defaultView || window;
 
-        // 1) Quill API（如果是）
         try {
           const QuillCtor = (win as any).Quill;
           const quill =
@@ -327,10 +542,8 @@ export const csdnAdapter: PlatformAdapter = {
           }
         } catch {}
 
-        // 2) paste event
         await dispatchPaste(editor, { html: html || undefined, text: fallbackText });
 
-        // 3) execCommand / innerHTML
         try {
           editor.focus();
           const ok = doc.execCommand?.('insertHTML', false, html);
@@ -347,9 +560,14 @@ export const csdnAdapter: PlatformAdapter = {
       };
 
       try {
+        console.log('[csdn-fill] Starting fill process...');
+        console.log('[csdn-fill] URL:', window.location.href);
+        console.log('[csdn-fill] isMarkdownEditorPage:', isMarkdownEditorPage());
+        
         // 1) 标题
         const titleField = await waitFor(() => findTitleField(), 25000);
         const title = String((payload as any).title || '');
+        console.log('[csdn-fill] Title field found:', titleField?.tagName, titleField?.className);
         if (titleField instanceof HTMLInputElement || titleField instanceof HTMLTextAreaElement) {
           setNativeValue(titleField, title);
         } else {
@@ -357,39 +575,68 @@ export const csdnAdapter: PlatformAdapter = {
           titleField.dispatchEvent(new Event('input', { bubbles: true }));
           titleField.dispatchEvent(new Event('change', { bubbles: true }));
         }
+        console.log('[csdn-fill] Title filled');
 
         // 2) 正文
         const markdown = String((payload as any).contentMarkdown || '');
         const html = String((payload as any).contentHtml || '');
         const fallbackText = html ? htmlToPlainText(html) || markdown : markdown;
+        console.log('[csdn-fill] Content length:', markdown.length);
 
-        // 编辑器常比标题更晚渲染：先等待任一正文编辑区出现，再进行填充，避免只填了标题。
+        // 等待编辑器出现
+        const editorSelectors = '.CodeMirror, .monaco-editor, .cm-content, .cm-editor, textarea, .ProseMirror, .ql-editor, [contenteditable="true"]';
         await waitFor(
           () =>
-            queryAllDeep('.CodeMirror, .monaco-editor, .cm-content[contenteditable="true"], .cm-editor, textarea, .ProseMirror, .ql-editor')
+            queryAllDeep(editorSelectors)
               .map((e) => e as HTMLElement)
               .find((e) => isVisible(e) && !isLikelyTitle(e)) || null,
           25000
         ).catch(() => null);
+        
+        // 额外等待编辑器初始化
+        await sleep(2000);
+        
+        // 打印调试信息
+        const allEditors = queryAllDeep(editorSelectors)
+          .map((e) => e as HTMLElement)
+          .filter((e) => isVisible(e) && !isLikelyTitle(e));
+        console.log('[csdn-fill] All visible editors:', allEditors.map(e => ({
+          tag: e.tagName,
+          class: e.className?.substring?.(0, 60),
+          id: e.id,
+          area: Math.round(getRectArea(e)),
+        })));
 
-        const ok =
+        let ok =
           tryFillCodeMirror5(markdown) ||
           tryFillMonaco(markdown) ||
           (await tryFillCodeMirror6(markdown)) ||
-          tryFillTextarea(markdown);
+          tryFillTextarea(markdown) ||
+          (await tryFillContentEditable(markdown));
 
-        // 若是 Markdown 编辑器页，必须“纯 Markdown”写入；不要回退到富文本 HTML 粘贴。
+        console.log('[csdn-fill] Fill result:', ok);
+
         if (!ok && isMarkdownEditorPage()) {
           throw new Error('未找到可写入的 Markdown 编辑器控件');
         }
 
         if (!ok) {
+          console.log('[csdn-fill] Trying rich editor fallback');
           const editor = await waitFor(() => findBestRichEditor(), 25000);
           await fillRichEditor(editor, html, fallbackText);
         }
 
-        return { url: window.location.href };
+        // 内容填充完成，不执行发布操作
+        // 根据统一发布控制原则：最终发布必须由用户手动完成
+        console.log('[csdn] 内容填充完成');
+        console.log('[csdn] ⚠️ 发布操作需要用户手动完成');
+
+        return { 
+          url: window.location.href,
+          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+        };
       } catch (error: any) {
+        console.error('[csdn-fill] Error:', error);
         return {
           url: window.location.href,
           __synccasterError: {
