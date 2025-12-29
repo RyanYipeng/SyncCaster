@@ -298,6 +298,15 @@ export const bilibiliAdapter: PlatformAdapter = {
         console.log('[bilibili] fillAndPublish starting');
         console.log('[bilibili] ⚠️ B 站专栏不支持 Markdown，将使用富文本 HTML 填充');
         
+        // 检查是否有图片需要处理
+        const downloadedImages = (payload as any).__downloadedImages || [];
+        const hasExternalImages = downloadedImages.length > 0;
+        
+        if (hasExternalImages) {
+          console.log('[bilibili] 检测到', downloadedImages.length, '张图片需要上传');
+          console.log('[bilibili] 图片将在内容填充后由 publish-engine 处理');
+        }
+        
         // 1) 定位标题与编辑器
         const titleField = await waitForAny(
           [
@@ -353,13 +362,38 @@ export const bilibiliAdapter: PlatformAdapter = {
           await pasteHtml(editor, quill, normalizedHtml, fallbackText);
         }
 
-        // 5) 内容填充完成，不执行发布操作
+        // 5) 检查是否有外链图片（B 站不支持外链图片显示）
+        const imgElements = editor.querySelectorAll('img');
+        const externalImages: string[] = [];
+        imgElements.forEach((img) => {
+          const src = img.getAttribute('src') || '';
+          // B 站自己的图片域名
+          const isBilibiliImage = /^https?:\/\/[^/]*\.hdslb\.com\//i.test(src) || 
+                                   /^https?:\/\/[^/]*\.bilivideo\.com\//i.test(src) ||
+                                   /^https?:\/\/i[0-9]*\.hdslb\.com\//i.test(src);
+          if (src && !isBilibiliImage && !src.startsWith('data:') && !src.startsWith('blob:')) {
+            externalImages.push(src);
+          }
+        });
+        
+        if (externalImages.length > 0) {
+          console.warn('[bilibili] ⚠️ 检测到', externalImages.length, '张外链图片，B 站可能无法显示');
+          console.warn('[bilibili] 外链图片列表:', externalImages);
+          console.log('[bilibili] 提示：图片将由 publish-engine 自动上传到 B 站，请稍候...');
+        }
+
+        // 6) 内容填充完成，不执行发布操作
         console.log('[bilibili] Content fill completed');
         console.log('[bilibili] ⚠️ 发布操作需要用户手动完成');
+        
+        const note = externalImages.length > 0 
+          ? `内容已填充完成。检测到 ${externalImages.length} 张外链图片，正在自动上传到 B 站...`
+          : '内容已填充完成，请手动点击发布按钮完成发布';
 
         return { 
           url: window.location.href,
-          __synccasterNote: '内容已填充完成，请手动点击发布按钮完成发布'
+          __synccasterNote: note,
+          __externalImages: externalImages,
         };
       } catch (error: any) {
         console.error('[bilibili] Fill failed:', error);

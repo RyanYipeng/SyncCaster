@@ -20,7 +20,8 @@ export const oschinaAdapter: PlatformAdapter = {
   icon: 'oschina',
   capabilities: {
     domAutomation: true,
-    supportsMarkdown: true,
+    // OSChina 的 Markdown 编辑器对格式支持有限：优先走 HTML 编辑器（Markdown 将在 publish-engine 中转换为 HTML）。
+    supportsMarkdown: false,
     supportsHtml: true,
     supportsTags: true,
     supportsCategories: true,
@@ -61,6 +62,8 @@ export const oschinaAdapter: PlatformAdapter = {
     ],
     // 动态生成编辑器 URL（需要用户 ID）
     getEditorUrl: (accountId?: string): string => {
+      console.log('[oschina:getEditorUrl] accountId:', accountId);
+      
       if (accountId) {
         // accountId 格式为 "oschina-{userId}" 或 "oschina_{userId}"，需要提取纯数字的 userId
         // 例如：oschina-9580420 -> 9580420
@@ -75,16 +78,21 @@ export const oschinaAdapter: PlatformAdapter = {
         
         // 确保 userId 是有效的（非空且为纯数字）
         if (userId && userId.trim() && /^\d+$/.test(userId.trim())) {
-          return `https://my.oschina.net/u/${userId.trim()}/blog/write`;
+          const url = `https://my.oschina.net/u/${userId.trim()}/blog/write`;
+          console.log('[oschina:getEditorUrl] Generated URL:', url);
+          return url;
         }
 
         // 兼容特殊 accountId（例如含有其它后缀）：尝试从字符串中提取 userId 数字片段（避免 Date.now() 13位时间戳）
         const m = userId.match(/(?:^|[^0-9])(\d{5,12})(?:[^0-9]|$)/);
         if (m?.[1]) {
-          return `https://my.oschina.net/u/${m[1]}/blog/write`;
+          const url = `https://my.oschina.net/u/${m[1]}/blog/write`;
+          console.log('[oschina:getEditorUrl] Generated URL (fallback):', url);
+          return url;
         }
       }
       // 回退到通用入口（可能会重定向）
+      console.log('[oschina:getEditorUrl] Using fallback URL');
       return 'https://my.oschina.net/blog/write';
     },
     fillAndPublish: async function (payload) {
@@ -92,6 +100,38 @@ export const oschinaAdapter: PlatformAdapter = {
       console.log('[oschina] Current URL:', window.location.href);
       
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+      // 检查当前 URL 是否是编辑页面
+      const currentUrl = window.location.href;
+      const isEditorPage = /\/blog\/write\b/i.test(currentUrl);
+      
+      if (!isEditorPage) {
+        console.error('[oschina] 当前页面不是编辑页面，请检查 URL');
+        console.log('[oschina] Expected URL pattern: /blog/write');
+        console.log('[oschina] Current URL:', currentUrl);
+        
+        // 尝试从当前 URL 提取用户 ID 并跳转到编辑页
+        const userIdMatch = currentUrl.match(/\/u\/(\d+)/);
+        if (userIdMatch?.[1]) {
+          const editorUrl = `https://my.oschina.net/u/${userIdMatch[1]}/blog/write`;
+          console.log('[oschina] Redirecting to editor page:', editorUrl);
+          window.location.href = editorUrl;
+          return {
+            url: editorUrl,
+            __synccasterError: {
+              message: '页面已重定向到编辑页，请重新发布',
+              redirected: true,
+            },
+          } as any;
+        }
+        
+        return {
+          url: currentUrl,
+          __synccasterError: {
+            message: '当前页面不是编辑页面，请手动打开编辑页后重试',
+          },
+        } as any;
+      }
 
       // 等待页面完全加载
       if (document.readyState !== 'complete') {
@@ -348,6 +388,114 @@ export const oschinaAdapter: PlatformAdapter = {
         
         // 0. 切换到 Markdown 编辑器（如果存在切换按钮）
         console.log('[oschina] Step 0: 切换到 Markdown 编辑器');
+        const switchToHtmlEditor = async (): Promise<boolean> => {
+          const htmlSwitchSelectors = [
+            'button:contains("HTML")',
+            'a:contains("HTML")',
+            '[data-type="html"]',
+            '[data-editor="html"]',
+            '.editor-switch-html',
+            '.switch-html',
+            '.html-tab',
+            '.tab-html',
+            '.editor-type-switch [data-type="html"]',
+            '.editor-tabs [data-type="html"]',
+            '.editor-mode-switch .html',
+          ];
+
+          const allButtons = Array.from(
+            document.querySelectorAll(
+              'button, a, [role="tab"], [role="radio"], [role="button"], label, .tab, .switch-item, .editor-type-switch *, .editor-tabs *, .editor-mode-switch *'
+            )
+          );
+
+          const htmlButton = allButtons.find((el) => {
+            const t = String(el.textContent || '').replace(/\\s+/g, '').toLowerCase();
+            const isHtml = t === 'html' || t.includes('html编辑器') || t.includes('htmleditor') || t.includes('html');
+            const isActive =
+              el.classList.contains('active') ||
+              el.classList.contains('selected') ||
+              el.classList.contains('current') ||
+              el.classList.contains('is-active') ||
+              el.getAttribute('aria-selected') === 'true' ||
+              el.getAttribute('aria-checked') === 'true' ||
+              el.getAttribute('aria-pressed') === 'true' ||
+              el.getAttribute('data-active') === 'true';
+            return isHtml && !isActive && isVisible(el);
+          });
+
+          if (htmlButton) {
+            console.log('[oschina] Found HTML switch button:', htmlButton.textContent?.trim());
+            const clickable = (htmlButton as HTMLElement).closest(
+              'button, a, [role=\"tab\"], [role=\"radio\"], [role=\"button\"], label'
+            ) as HTMLElement | null;
+            (clickable || (htmlButton as HTMLElement)).click();
+            await sleep(250);
+            return true;
+          }
+
+          for (const selector of htmlSwitchSelectors) {
+            try {
+              const el = document.querySelector(selector);
+              if (el && isVisible(el)) {
+                console.log('[oschina] Found HTML switch via selector:', selector);
+                (el as HTMLElement).click();
+                await sleep(250);
+                return true;
+              }
+            } catch {}
+          }
+
+          // Fallback: find a toggle group that contains both HTML/Markdown
+          try {
+            const norm = (s: string) => (s || '').replace(/\\s+/g, '').toLowerCase();
+            const isActive = (el: Element) => {
+              const he = el as HTMLElement;
+              return (
+                he.classList.contains('active') ||
+                he.classList.contains('selected') ||
+                he.classList.contains('current') ||
+                he.classList.contains('is-active') ||
+                he.getAttribute('aria-selected') === 'true' ||
+                he.getAttribute('aria-checked') === 'true' ||
+                he.getAttribute('aria-pressed') === 'true' ||
+                he.getAttribute('data-active') === 'true'
+              );
+            };
+
+            const candidates = Array.from(
+              document.querySelectorAll('button, a, [role=\"tab\"], [role=\"radio\"], [role=\"button\"], label, li, div, span')
+            ).filter(isVisible);
+
+            const containers = candidates
+              .map((el) => ({ el, t: norm(el.textContent || '') }))
+              .filter(({ t }) => t.includes('markdown') && (t.includes('html') || t.includes('html编辑器')))
+              .sort((a, b) => getRectArea(a.el) - getRectArea(b.el));
+
+            const container = containers[0]?.el as HTMLElement | undefined;
+            if (container) {
+              const inside = Array.from(
+                container.querySelectorAll('button, a, [role=\"tab\"], [role=\"radio\"], [role=\"button\"], label, li, div, span')
+              )
+                .filter((el) => {
+                  const t = norm(el.textContent || '');
+                  return isVisible(el) && (t.includes('html') || t.includes('html编辑器'));
+                })
+                .find((el) => !isActive(el));
+
+              if (inside) {
+                console.log('[oschina] Found HTML switch via HTML/Markdown toggle');
+                const clickable = (inside as HTMLElement).closest('button, a, [role=\"tab\"], [role=\"radio\"], [role=\"button\"], label') as HTMLElement | null;
+                (clickable || (inside as HTMLElement)).click();
+                await sleep(250);
+                return true;
+              }
+            }
+          } catch {}
+
+          console.log('[oschina] No HTML switch button found, may already be in HTML mode');
+          return false;
+        };
         const switchToMarkdown = async (): Promise<boolean> => {
           // 查找 Markdown 切换按钮/标签
           const mdSwitchSelectors = [
@@ -453,11 +601,13 @@ export const oschinaAdapter: PlatformAdapter = {
           return false;
         };
         
-        await switchToMarkdown();
+        await switchToHtmlEditor();
         // 确保切换完成后再开始填充（Markdown 编辑器通常为 CodeMirror/textarea）
         await waitFor(
           () => {
             const docs = getAllDocs();
+            const hasRich = docs.some((d) => d.querySelectorAll('.ql-editor, .ProseMirror, [contenteditable="true"]').length > 0);
+            if (hasRich) return {} as any;
             const hasCm = docs.some((d) => d.querySelectorAll('.CodeMirror').length > 0);
             if (hasCm) return {} as any;
             const hasTextarea = docs.some((d) => d.querySelectorAll('textarea').length > 0);
@@ -492,8 +642,9 @@ export const oschinaAdapter: PlatformAdapter = {
 
         // 2. 填充内容
         console.log('[oschina] Step 2: 填充内容');
-        const markdown = (payload as any).contentMarkdown || '';
-        console.log('[oschina] Content length:', markdown.length);
+        const contentHtml = String((payload as any).contentHtml || '');
+        const markdown = String((payload as any).contentMarkdown || '');
+        console.log('[oschina] HTML length:', contentHtml.length, 'Markdown length:', markdown.length);
         
         // 等待编辑器出现
         await waitFor(
@@ -501,7 +652,7 @@ export const oschinaAdapter: PlatformAdapter = {
             const docs = getAllDocs();
             const hasCm = docs.some((d) => d.querySelectorAll('.CodeMirror').length > 0);
             const hasTextarea = docs.some((d) => d.querySelectorAll('textarea').length > 0);
-            const hasEditable = docs.some((d) => d.querySelectorAll('[contenteditable="true"]').length > 0);
+            const hasEditable = docs.some((d) => d.querySelectorAll('.ql-editor, .ProseMirror, [contenteditable="true"]').length > 0);
             return (hasCm || hasTextarea || hasEditable) ? ({} as any) : null;
           },
           12000
@@ -509,7 +660,87 @@ export const oschinaAdapter: PlatformAdapter = {
         
         await sleep(150);
 
+        const tryFillQuillHtml = (html: string): boolean => {
+          if (!html) return false;
+          for (const doc of getAllDocs()) {
+            const editors = Array.from(doc.querySelectorAll<HTMLElement>('.ql-editor'));
+            for (const el of editors) {
+              const win = el.ownerDocument.defaultView || window;
+              const QuillCtor = (win as any).Quill;
+              const quill =
+                QuillCtor?.find?.(el) ||
+                (el as any).__quill ||
+                ((el.closest('.ql-container') as any)?.__quill ?? null);
+              if (quill?.clipboard?.dangerouslyPasteHTML) {
+                try {
+                  quill.clipboard.dangerouslyPasteHTML(0, html);
+                  quill.setSelection?.(quill.getLength?.() ?? 0, 0);
+                  return true;
+                } catch {}
+              }
+              try {
+                el.innerHTML = html;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              } catch {}
+            }
+          }
+          return false;
+        };
+
+        const tryFillRichHtml = async (html: string): Promise<boolean> => {
+          if (!html) return false;
+          const candidates: HTMLElement[] = [];
+          for (const doc of getAllDocs()) {
+            candidates.push(...Array.from(doc.querySelectorAll<HTMLElement>('.ProseMirror, [contenteditable="true"]')));
+          }
+          const filtered = candidates.filter((e) => {
+            try { return !isLikelyTitle(e) && getRectArea(e) > 2000; } catch { return false; }
+          });
+          if (filtered.length === 0) return false;
+          filtered.sort((a, b) => getRectArea(b) - getRectArea(a));
+          const target = filtered[0];
+          try { target.scrollIntoView?.({ block: 'center' }); } catch {}
+          try {
+            target.focus?.();
+            target.innerHTML = html;
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+            target.dispatchEvent(new Event('change', { bubbles: true }));
+            await sleep(80);
+            return true;
+          } catch {
+            return false;
+          }
+        };
+
+        const tryFillIframeHtml = async (html: string): Promise<boolean> => {
+          if (!html) return false;
+          const iframes = Array.from(document.querySelectorAll('iframe')) as HTMLIFrameElement[];
+          for (const iframe of iframes) {
+            try {
+              const doc = iframe.contentDocument;
+              const body = doc?.body as HTMLElement | null;
+              if (!body) continue;
+              const editor = (doc!.querySelector('[contenteditable=\"true\"]') as HTMLElement | null) || body;
+              editor.focus?.();
+              editor.innerHTML = html;
+              editor.dispatchEvent(new Event('input', { bubbles: true }));
+              editor.dispatchEvent(new Event('change', { bubbles: true }));
+              await sleep(80);
+              return true;
+            } catch {}
+          }
+          return false;
+        };
+
         const ok =
+          tryFillQuillHtml(contentHtml) ||
+          (await tryFillRichHtml(contentHtml)) ||
+          (await tryFillIframeHtml(contentHtml)) ||
+          tryFillCodeMirror5(contentHtml) ||
+          tryFillTextarea(contentHtml) ||
+          // 兜底：HTML 模式失败时，仍尝试写入 Markdown 编辑器
           tryFillCodeMirror5(markdown) ||
           tryFillTextarea(markdown) ||
           (await tryFillContentEditable(markdown));

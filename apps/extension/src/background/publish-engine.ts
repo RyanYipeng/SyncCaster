@@ -113,12 +113,19 @@ export async function publishToTarget(
       return { success: false, error: 'Auth invalid' };
     }
 
-    // 处理图片 - 对于 DOM 模式，图片将在发布时一起处理
+    // 处理图片/内容预处理
     // 注意：部分来源的 Markdown 图片链接会混入空格/换行（例如 `. jpeg`），导致平台/上传无法识别。
     // 这里先规范化图片语法里的 URL，保证后续提取、上传、替换都基于同一个“干净 URL”。
+    let bodyMd = post.body_md || '';
+    // OSChina 的 HTML 编辑器不支持直接渲染 `$...$` 公式：先把 LaTeX 公式转为图片链接（后续会走同一套图片上传/替换）。
+    if (target.platform === 'oschina') {
+      bodyMd = convertLatexMathToImageMarkdown(bodyMd);
+    }
+    bodyMd = normalizeMarkdownImageUrls(bodyMd);
+
     let processedPost = {
       ...post,
-      body_md: normalizeMarkdownImageUrls(post.body_md || ''),
+      body_md: bodyMd,
     };
 
     // ================================
@@ -546,6 +553,11 @@ export async function publishToTarget(
                    return out;
                  };
 
+                 const getRectArea = (el: Element) => {
+                   const r = (el as HTMLElement).getBoundingClientRect();
+                   return Math.max(1, r.width) * Math.max(1, r.height);
+                 };
+
                  const getAllDocs = (): Document[] => {
                    const docs: Document[] = [document];
                    const iframes = Array.from(document.querySelectorAll('iframe')) as HTMLIFrameElement[];
@@ -557,6 +569,58 @@ export async function publishToTarget(
                    }
                    return docs;
                  };
+
+                 const findRichEditor = (): HTMLElement | null => {
+                   const candidates: HTMLElement[] = [];
+                   for (const doc of getAllDocs()) {
+                     candidates.push(...Array.from(doc.querySelectorAll<HTMLElement>('.ql-editor, .ProseMirror, [contenteditable=\"true\"]')));
+                   }
+                   const filtered = candidates.filter((el) => {
+                     const attrs = [
+                       el.getAttribute('placeholder') || '',
+                       el.getAttribute('aria-label') || '',
+                       el.getAttribute('name') || '',
+                       el.id || '',
+                       el.className || '',
+                     ]
+                       .join(' ')
+                       .toLowerCase();
+                     if (/title|标题/i.test(attrs)) return false;
+                     return true;
+                   });
+                   if (filtered.length === 0) return null;
+                   filtered.sort((a, b) => getRectArea(b) - getRectArea(a));
+                   return filtered[0];
+                 };
+
+                 const rich = findRichEditor();
+                 if (rich) {
+                   const current = String(rich.innerHTML || '');
+                   const next = replaceByPairs(current);
+                   if (next !== current) {
+                     const win = rich.ownerDocument.defaultView || window;
+                     const QuillCtor = (win as any).Quill;
+                     const quill =
+                       QuillCtor?.find?.(rich) ||
+                       (rich as any).__quill ||
+                       ((rich.closest('.ql-container') as any)?.__quill ?? null);
+                     try {
+                       if (quill?.clipboard?.dangerouslyPasteHTML) {
+                         quill.clipboard.dangerouslyPasteHTML(0, next);
+                         quill.setSelection?.(quill.getLength?.() ?? 0, 0);
+                         return { ok: true, method: 'quill' };
+                       }
+                     } catch {}
+
+                     try {
+                       rich.innerHTML = next;
+                       rich.dispatchEvent(new Event('input', { bubbles: true }));
+                       rich.dispatchEvent(new Event('change', { bubbles: true }));
+                       return { ok: true, method: 'rich' };
+                     } catch {}
+                   }
+                   return { ok: true, method: 'rich_noop' };
+                 }
 
                  const findCodeMirror = () => {
                    for (const doc of getAllDocs()) {
@@ -969,10 +1033,17 @@ async function uploadImagesInPlatform(
   // B 站：部分环境会拦截合成的 paste/drop 事件（站内粘贴上传不稳定）。
   // 这里先尝试走 API 直传（若可用），失败再回退到“站内执行”。
   if (platformId === 'bilibili') {
+    console.log('[publish-engine] B 站图片上传：尝试 API 直传');
     try {
       const csrf =
         (await getCookie('https://www.bilibili.com/', 'bili_jct')) ||
         (await getCookie('https://api.bilibili.com/', 'bili_jct'));
+
+      if (!csrf) {
+        console.warn('[publish-engine] B 站 CSRF token (bili_jct) 未找到，可能未登录或 Cookie 已过期');
+      } else {
+        console.log('[publish-engine] B 站 CSRF token 已获取');
+      }
 
       const endpoints = [
         { url: 'https://api.bilibili.com/x/article/creative/article/upimage', fileField: 'file' },
@@ -986,6 +1057,7 @@ async function uploadImagesInPlatform(
 
       for (let i = 0; i < downloadedImages.length; i++) {
         const img = downloadedImages[i];
+        console.log(`[publish-engine] B 站上传图片 ${i + 1}/${downloadedImages.length}: ${img.url.substring(0, 80)}...`);
         try {
           const blobRes = await fetch(img.base64);
           const blob = await blobRes.blob();
@@ -993,6 +1065,8 @@ async function uploadImagesInPlatform(
           const filename = `image_${Date.now()}_${i}.${ext}`;
 
           let uploadedUrl: string | undefined;
+          let lastError: string | undefined;
+          
           for (const ep of endpoints) {
             try {
               const form = new FormData();
@@ -1002,20 +1076,45 @@ async function uploadImagesInPlatform(
                 form.append('csrf_token', csrf);
               }
 
+              console.log(`[publish-engine] 尝试 B 站 API: ${ep.url}`);
               const resp = await fetch(ep.url, { method: 'POST', body: form, credentials: 'include' });
-              if (!resp.ok) continue;
+              
+              if (!resp.ok) {
+                lastError = `HTTP ${resp.status}`;
+                console.warn(`[publish-engine] B 站 API 返回错误: ${lastError}`);
+                continue;
+              }
+              
               const data = await tryParseJson(resp);
+              console.log('[publish-engine] B 站 API 响应:', JSON.stringify(data).substring(0, 200));
+              
+              // B 站 API 返回格式：{ code: 0, data: { url: "..." } }
+              if (data?.code !== 0) {
+                lastError = data?.message || `code: ${data?.code}`;
+                console.warn(`[publish-engine] B 站 API 业务错误: ${lastError}`);
+                continue;
+              }
+              
               uploadedUrl = findUrlInObject(data);
-              if (uploadedUrl) break;
-            } catch {
+              if (uploadedUrl) {
+                console.log(`[publish-engine] B 站图片上传成功: ${uploadedUrl}`);
+                break;
+              }
+            } catch (e: any) {
+              lastError = e?.message || String(e);
+              console.warn(`[publish-engine] B 站 API 异常: ${lastError}`);
               // try next endpoint
             }
           }
 
-          if (!uploadedUrl) throw new Error('no bilibili url');
+          if (!uploadedUrl) {
+            console.error(`[publish-engine] B 站图片上传失败: ${lastError || 'no url returned'}`);
+            throw new Error(lastError || 'no bilibili url');
+          }
           urlMapping.set(img.url, uploadedUrl);
           success++;
-        } catch {
+        } catch (e: any) {
+          console.error(`[publish-engine] B 站图片处理失败:`, e?.message || e);
           failed++;
         } finally {
           onProgress?.({ completed: success + failed, total: imageUrls.length });
@@ -1026,8 +1125,10 @@ async function uploadImagesInPlatform(
         console.log(`[publish-engine] bilibili API 直传完成: ${success}/${downloadedImages.length} 成功`);
         return { urlMapping, stats: { total: imageUrls.length, success, failed } };
       }
-    } catch {
-      // ignore and fallback
+      
+      console.warn(`[publish-engine] B 站 API 直传全部失败 (${failed}/${downloadedImages.length})，将回退到站内执行`);
+    } catch (e: any) {
+      console.warn('[publish-engine] B 站 API 直传异常，回退到站内执行:', e?.message || e);
     }
   }
 
@@ -1519,6 +1620,7 @@ async function uploadImagesInPlatform(
           if (!headers['csrf-token']) headers['csrf-token'] = csrfMeta;
         }
         if (!headers['x-requested-with']) headers['x-requested-with'] = 'XMLHttpRequest';
+        if (!headers['accept']) headers['accept'] = 'application/json, text/plain, */*';
 
         const uploadResponse = await fetch(strategyConfig.uploadUrl, {
           method: strategyConfig.method || 'POST',
@@ -1527,20 +1629,85 @@ async function uploadImagesInPlatform(
           credentials: 'include',
         });
 
+        const contentType =
+          (uploadResponse.headers && typeof uploadResponse.headers.get === 'function'
+            ? uploadResponse.headers.get('content-type') || ''
+            : '') || '';
+        const rawText = await uploadResponse.text();
+
         if (!uploadResponse.ok) {
-          const textResp = await uploadResponse.text();
-          throw new Error('上传失败: HTTP ' + uploadResponse.status + ' - ' + textResp.substring(0, 100));
+          throw new Error('上传失败: HTTP ' + uploadResponse.status + ' - ' + String(rawText || '').substring(0, 180));
         }
 
-        const data = await uploadResponse.json();
+        const trimmed = String(rawText || '').trim();
+        const tryJsonParse = (text: string): any | null => {
+          if (!text) return null;
+          try {
+            return JSON.parse(text);
+          } catch {
+            return null;
+          }
+        };
+
+        let data: any = null;
+        if (contentType.includes('application/json') || trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          data = tryJsonParse(trimmed);
+        }
+        // 有些站点会把 JSON 包在 `<pre>...</pre>` / HTML 中，做一次启发式提取
+        if (!data) {
+          const firstObj = trimmed.indexOf('{');
+          const lastObj = trimmed.lastIndexOf('}');
+          if (firstObj >= 0 && lastObj > firstObj) {
+            data = tryJsonParse(trimmed.slice(firstObj, lastObj + 1));
+          }
+        }
+        if (!data) {
+          const firstArr = trimmed.indexOf('[');
+          const lastArr = trimmed.lastIndexOf(']');
+          if (firstArr >= 0 && lastArr > firstArr) {
+            data = tryJsonParse(trimmed.slice(firstArr, lastArr + 1));
+          }
+        }
+
         let newUrl: string | undefined;
 
-        if (data.data) {
-          newUrl = data.data.url || data.data.url_1 || data.data.image_url || data.data.imageUrl;
+        if (data && typeof data === 'object' && (data as any).data) {
+          const dd = (data as any).data;
+          newUrl = dd.url || dd.url_1 || dd.image_url || dd.imageUrl || dd.imgUrl || dd.img_url;
         }
 
         if (!newUrl) {
-          newUrl = data.url || data.result?.url || data.imageUrl || data.src || data.image_url;
+          if (data && typeof data === 'object') {
+            newUrl =
+              (data as any).url ||
+              (data as any).imgUrl ||
+              (data as any).img_url ||
+              (data as any).result?.url ||
+              (data as any).imageUrl ||
+              (data as any).src ||
+              (data as any).image_url;
+          }
+        }
+
+        const findUrlInText = (text: string): string | undefined => {
+          if (!text) return undefined;
+          // 优先匹配常见图片 URL
+          const img = text.match(
+            /(https?:\/\/[^\s"'<>]+?\.(?:png|jpe?g|gif|webp|svg|avif)(?:\?[^\s"'<>]*)?)|((?:\/\/)[^\s"'<>]+?\.(?:png|jpe?g|gif|webp|svg|avif)(?:\?[^\s"'<>]*)?)|((?:\/)[^\s"'<>]+?\.(?:png|jpe?g|gif|webp|svg|avif)(?:\?[^\s"'<>]*)?)/i
+          );
+          if (img?.[1]) return img[1];
+          if (img?.[2]) return img[2];
+          if (img?.[3]) return img[3];
+
+          // 兜底：任意 http(s) 链接
+          const any = text.match(/https?:\/\/[^\s"'<>]+/i);
+          if (any?.[0]) return any[0];
+
+          // 兜底：任意 `//host/path`（通常是 CDN）
+          const protoLess = text.match(/\/\/[^\s"'<>]+/i);
+          if (protoLess?.[0]) return protoLess[0];
+
+          return undefined;
         }
 
         if (!newUrl && typeof data === 'object') {
@@ -1550,7 +1717,7 @@ async function uploadImagesInPlatform(
               return obj;
             }
             if (typeof obj === 'object') {
-              for (const key of ['url', 'url_1', 'image_url', 'imageUrl', 'src', 'path']) {
+              for (const key of ['url', 'url_1', 'image_url', 'imageUrl', 'imgUrl', 'img_url', 'src', 'path']) {
                 if (obj[key] && typeof obj[key] === 'string') {
                   const val = obj[key];
                   if (val.startsWith('http://') || val.startsWith('https://') || val.startsWith('//')) {
@@ -1569,7 +1736,19 @@ async function uploadImagesInPlatform(
         }
 
         if (!newUrl) {
-          throw new Error('无法从响应中解析图片 URL: ' + JSON.stringify(data).substring(0, 200));
+          // 若解析不到 JSON，则尝试从文本/HTML 中提取 URL（部分站点返回 HTML 包裹）
+          if (!data) {
+            newUrl = findUrlInText(trimmed);
+          }
+        }
+
+        if (!newUrl && typeof data === 'string') {
+          newUrl = findUrlInText(data);
+        }
+
+        if (!newUrl) {
+          const hint = contentType.includes('text/html') || trimmed.startsWith('<') ? '（返回 HTML，可能登录失效或需要验证）' : '';
+          throw new Error('无法从响应中解析图片 URL' + hint + ': ' + trimmed.substring(0, 220));
         }
 
         // 规范化 URL（兼容 `//host/path` 与 `/path`）
@@ -1792,6 +1971,153 @@ function guessImageFormat(url: string): 'jpeg' | 'png' | 'webp' | 'gif' | 'svg' 
     default:
       return 'jpeg';
   }
+}
+
+function convertLatexMathToImageMarkdown(markdown: string): string {
+  if (!markdown) return markdown;
+  if (!markdown.includes('$')) return markdown;
+
+  const encodeForUrl = (input: string) =>
+    encodeURIComponent(input).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
+  const makeUrl = (latex: string) => `https://latex.codecogs.com/png.latex?${encodeForUrl(latex)}`;
+
+  const isLikelyMath = (latexRaw: string) => {
+    const latex = String(latexRaw || '').trim();
+    if (!latex) return false;
+    // 排除常见货币/金额：$100 / $99.00 / $ 100
+    if (/^[\d\s,.\u00A0]+$/.test(latex)) return false;
+    // 有 LaTeX 符号/运算符/字母时，基本可判断为公式
+    return /[\\^_{}=+\-*/]|[A-Za-z]/.test(latex);
+  };
+
+  const s = markdown;
+  let out = '';
+  let i = 0;
+
+  let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+  let inlineTickLen = 0;
+
+  const isEscaped = (idx: number) => idx > 0 && s[idx - 1] === '\\';
+  const isLineStart = (idx: number) => idx === 0 || s[idx - 1] === '\n';
+
+  while (i < s.length) {
+    // fenced code block: ``` / ~~~ （允许最多 3 个缩进）
+    if (!inlineTickLen && isLineStart(i)) {
+      let j = i;
+      let indent = 0;
+      while (j < s.length && (s[j] === ' ' || s[j] === '\t') && indent < 4) {
+        j++;
+        indent++;
+      }
+
+      const ch = s[j];
+      if ((ch === '`' || ch === '~') && indent <= 3) {
+        let k = j;
+        while (k < s.length && s[k] === ch) k++;
+        const count = k - j;
+        if (count >= 3) {
+          if (!inFence) {
+            inFence = true;
+            fenceChar = ch;
+            fenceLen = count;
+          } else if (fenceChar === ch && count >= fenceLen) {
+            inFence = false;
+            fenceChar = '';
+            fenceLen = 0;
+          }
+          out += s.slice(i, k);
+          i = k;
+          continue;
+        }
+      }
+    }
+
+    if (inFence) {
+      out += s[i++];
+      continue;
+    }
+
+    // inline code: `...`
+    if (s[i] === '`') {
+      let j = i;
+      while (j < s.length && s[j] === '`') j++;
+      const ticks = j - i;
+      if (!inlineTickLen) {
+        inlineTickLen = ticks;
+      } else if (ticks >= inlineTickLen) {
+        inlineTickLen = 0;
+      }
+      out += s.slice(i, j);
+      i = j;
+      continue;
+    }
+
+    if (inlineTickLen) {
+      out += s[i++];
+      continue;
+    }
+
+    // $$...$$ display math
+    if (s[i] === '$' && s[i + 1] === '$' && !isEscaped(i)) {
+      const start = i;
+      let j = i + 2;
+      while (j < s.length - 1) {
+        if (s[j] === '$' && s[j + 1] === '$' && !isEscaped(j)) {
+          const latex = s.slice(i + 2, j);
+          const trimmed = latex.trim();
+          if (trimmed) {
+            const url = makeUrl(trimmed);
+            out += `\n\n![formula](${url})\n\n`;
+            i = j + 2;
+            break;
+          } else {
+            out += s.slice(start, j + 2);
+            i = j + 2;
+            break;
+          }
+        }
+        j++;
+      }
+      if (i === start) {
+        out += '$$';
+        i += 2;
+      }
+      continue;
+    }
+
+    // $...$ inline math（不跨行）
+    if (s[i] === '$' && !isEscaped(i)) {
+      const start = i;
+      let j = i + 1;
+      while (j < s.length && s[j] !== '\n') {
+        if (s[j] === '$' && !isEscaped(j)) {
+          const latex = s.slice(i + 1, j);
+          if (isLikelyMath(latex)) {
+            const url = makeUrl(latex.trim());
+            out += `![formula](${url})`;
+            i = j + 1;
+          } else {
+            out += '$';
+            i = start + 1;
+          }
+          break;
+        }
+        j++;
+      }
+      if (i === start) {
+        out += '$';
+        i++;
+      }
+      continue;
+    }
+
+    out += s[i++];
+  }
+
+  return out;
 }
 
 function normalizeMarkdownImageUrls(markdown: string): string {
