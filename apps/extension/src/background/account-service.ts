@@ -219,30 +219,22 @@ async function sendMessageToTab(tabId: number, message: any, timeout = 25000): P
 /**
  * 等待标签页加载完成
  */
-async function waitForTabLoad(tabId: number, timeout = 30000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error('页面加载超时'));
-    }, timeout);
-    
-    const checkStatus = async () => {
-      try {
-        const tab = await chrome.tabs.get(tabId);
-        if (tab.status === 'complete') {
-          clearTimeout(timer);
-          // 额外等待一下让页面渲染
-          setTimeout(resolve, 500);
-        } else {
-          setTimeout(checkStatus, 500);
-        }
-      } catch (e) {
-        clearTimeout(timer);
-        reject(new Error('标签页已关闭'));
+async function waitForTabLoad(tabId: number, timeoutMs = 2500): Promise<void> {
+  // 某些站点（如 CSDN/思否）可能长时间处于 loading 状态或存在持续请求，等待 complete 会显著拖慢登录检测。
+  // 这里最多等待一小段时间，超时后也继续发送检测请求，让 content script 自己做短等待/回退。
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.status === 'complete') {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return;
       }
-    };
-    
-    checkStatus();
-  });
+    } catch {
+      throw new Error('标签页已关闭');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
 }
 
 /**
@@ -347,6 +339,28 @@ function extractUserIdFromAccountId(account: Account): string | undefined {
   return undefined;
 }
 
+function isCsdnFallbackUserId(value: string): boolean {
+  const v = value.trim();
+  return /^csdn_\d{10,}$/i.test(v) || /^\d{10,}$/.test(v);
+}
+
+function isCsdnUserIdLike(value: string): boolean {
+  const v = value.trim();
+  if (!v || v.length > 60) return false;
+  return /^(?:qq|weixin|m\d|csdn)_\d+$/i.test(v);
+}
+
+function extractCsdnUserIdFromAvatarUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  const trimmed = url.trim();
+  if (!trimmed) return undefined;
+  const match = trimmed.match(/\/[^\/]*_([a-zA-Z0-9][a-zA-Z0-9_-]{2,60})\.(?:jpg|jpeg|png)(?:[!?].*)?$/i);
+  const candidate = match?.[1]?.trim();
+  if (!candidate) return undefined;
+  if (candidate.toLowerCase().includes('default') || candidate.toLowerCase().includes('placeholder')) return undefined;
+  return candidate;
+}
+
 
 /**
  * 账号服务
@@ -375,8 +389,9 @@ export class AccountService {
         (() => {
           const nickname = String(account.nickname || '').trim();
           if (!nickname) return true;
+          if (isCsdnUserIdLike(nickname)) return true;
           const extracted = extractUserIdFromAccountId(account);
-          const uid = String(profileId || extracted || '').trim();
+          const uid = String(profileId || extracted || extractCsdnUserIdFromAvatarUrl(account.avatar) || '').trim();
           if (!uid) return false;
           return nickname.toLowerCase() === uid.toLowerCase();
         })());
@@ -390,9 +405,20 @@ export class AccountService {
     if (!config) return '';
 
     if (account.platform === 'csdn') {
-      const uid = String((account.meta as any)?.profileId || extractUserIdFromAccountId(account) || '').trim();
+      let uid = String((account.meta as any)?.profileId || extractUserIdFromAccountId(account) || '').trim();
+      if (!uid || uid === 'undefined' || isCsdnFallbackUserId(uid)) {
+        const avatarUid = extractCsdnUserIdFromAvatarUrl(account.avatar);
+        if (avatarUid && !isCsdnFallbackUserId(avatarUid)) {
+          uid = avatarUid;
+        } else {
+          const nickname = String(account.nickname || '').trim();
+          if (nickname && nickname !== 'CSDN用户' && !isCsdnFallbackUserId(nickname) && isCsdnUserIdLike(nickname)) {
+            uid = nickname;
+          }
+        }
+      }
       // 优先打开博客个人主页，可稳定提取昵称（避免把 userId 当昵称）
-      if (uid && uid !== 'undefined' && !uid.startsWith('csdn_') && !/^\d{10,}$/.test(uid)) {
+      if (uid && uid !== 'undefined' && !isCsdnFallbackUserId(uid)) {
         return `https://blog.csdn.net/${encodeURIComponent(uid)}?type=blog`;
       }
       return config.homeUrl;
@@ -478,7 +504,15 @@ export class AccountService {
   private static async maybeEnrichAccountProfile(account: Account): Promise<Account> {
     if (!this.shouldEnrichProfile(account)) return account;
     const enriched = await this.tryEnrichAccountProfileViaTab(account);
-    return enriched || account;
+    if (!enriched) return account;
+
+    // CSDN：首次补全可能只拿到 profileId（userId），但昵称仍是 userId；再用博客主页二次校准昵称/头像
+    if (account.platform === 'csdn' && this.shouldEnrichProfile(enriched)) {
+      const second = await this.tryEnrichAccountProfileViaTab(enriched);
+      return second || enriched;
+    }
+
+    return enriched;
   }
   
   /**

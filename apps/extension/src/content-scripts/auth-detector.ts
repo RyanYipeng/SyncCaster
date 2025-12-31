@@ -178,6 +178,28 @@ const juejinDetector: PlatformAuthDetector = {
        }
      };
 
+     const extractUserIdFromAvatarUrl = (avatarUrl?: string): string | undefined => {
+       if (!avatarUrl) return undefined;
+       const trimmed = avatarUrl.trim();
+       if (!trimmed) return undefined;
+       const match = trimmed.match(/\/[^\/]*_([a-zA-Z0-9][a-zA-Z0-9_-]{2,60})\.(?:jpg|jpeg|png)(?:[!?].*)?$/i);
+       const candidate = match?.[1]?.trim();
+       if (!candidate) return undefined;
+       const lower = candidate.toLowerCase();
+       if (lower === 'default' || lower === 'placeholder') return undefined;
+       return candidate;
+     };
+
+     const extractUserIdFromUrl = (): string | undefined => {
+       try {
+         if (window.location.host === 'blog.csdn.net') {
+           const first = window.location.pathname.split('/').filter(Boolean)[0];
+           if (first && first.length < 80 && first !== 'community') return first;
+         }
+       } catch {}
+       return undefined;
+     };
+
      // 优先：个人中心页面（SPA 渲染）直接从 DOM 提取昵称/头像
      const url = window.location.href;
      const isIHost = window.location.host === 'i.csdn.net';
@@ -243,21 +265,24 @@ const juejinDetector: PlatformAuthDetector = {
      // i.csdn.net 个人中心页经常是 hash 路由，且可能重定向到相近路径；只要 DOM 结构出现就视为“个人中心上下文”
      const hasUserCenterDom = isIHost && !!document.querySelector('.user-profile-head-name, .user-profile-avatar');
 
-     if (isUserCenterPage || hasUserCenterDom) {
-       // 该页面未登录时通常会引导跳转/展示登录入口，昵称/头像元素不会出现
-       const nicknameFromDom = await waitForValue(() => getReliableNicknameFromDom(), { timeoutMs: 10000 });
-       const avatarFromDom = await waitForValue(() => getReliableAvatarFromDom(), { timeoutMs: 10000 });
-       if (nicknameFromDom || avatarFromDom) {
-         const cookieUser = getUserNameFromCookie();
-         const bg = await fetchPlatformInfoFromBackground('csdn');
-         return {
-           loggedIn: true,
-           platform: 'csdn',
-           nickname: nicknameFromDom || cookieUser || bg?.nickname || 'CSDN用户',
-           avatar: avatarFromDom || bg?.avatar,
-         };
+      if (isUserCenterPage || hasUserCenterDom) {
+        // 该页面未登录时通常会引导跳转/展示登录入口，昵称/头像元素不会出现
+        const nicknameFromDom = await waitForValue(() => getReliableNicknameFromDom(), { timeoutMs: 2500 });
+        const avatarFromDom = await waitForValue(() => getReliableAvatarFromDom(), { timeoutMs: 2500 });
+        if (nicknameFromDom || avatarFromDom) {
+          const cookieUser = getUserNameFromCookie();
+          const inferredUserId =
+            cookieUser || extractUserIdFromAvatarUrl(avatarFromDom) || extractUserIdFromUrl() || undefined;
+          const bg = await fetchPlatformInfoFromBackground('csdn');
+          return {
+            loggedIn: true,
+            platform: 'csdn',
+            userId: inferredUserId || bg?.userId,
+            nickname: nicknameFromDom || cookieUser || bg?.nickname || 'CSDN用户',
+            avatar: avatarFromDom || bg?.avatar,
+          };
+        }
        }
-      }
     
     // 优先使用 API
     try {
@@ -280,7 +305,7 @@ const juejinDetector: PlatformAuthDetector = {
           const suspectNickname =
             !trimmedNickname ||
             (trimmedUserId && trimmedNickname.toLowerCase() === trimmedUserId.toLowerCase()) ||
-            /^csdn_\d+$/i.test(trimmedNickname);
+            /^(?:csdn_\d+|qq_\d+|weixin_\d+|m\d+_\d+)$/i.test(trimmedNickname);
 
           if (suspectNickname) {
             const domNickname = getReliableNicknameFromDom();
@@ -353,12 +378,18 @@ const juejinDetector: PlatformAuthDetector = {
     const shouldWaitForDom = cookieState?.loggedIn === true;
     const nicknameFromDom = shouldWaitForDom ? await waitForValue(() => getNicknameFromDom()) : getNicknameFromDom();
     const avatarFromDom = shouldWaitForDom ? await waitForValue(() => getAvatarFromDom(), { timeoutMs: 1500 }) : getAvatarFromDom();
+    const inferredUserId =
+      extractUserIdFromUrl() ||
+      (cookieState?.userId ? String(cookieState.userId) : undefined) ||
+      extractUserIdFromAvatarUrl(avatarFromDom) ||
+      undefined;
 
     // CSDN 子域名较多：content script 可能会遇到 CORS/HttpOnly 限制，兜底让 background 统一检测并补全昵称/头像
     const bg = await fetchPlatformInfoFromBackground('csdn');
     if (bg?.loggedIn) {
       return {
         ...bg,
+        userId: inferredUserId || bg.userId,
         nickname: nicknameFromDom || bg.nickname,
         avatar: avatarFromDom || bg.avatar,
       };
@@ -366,6 +397,7 @@ const juejinDetector: PlatformAuthDetector = {
     if (cookieState) {
       return {
         ...cookieState,
+        userId: inferredUserId || cookieState.userId,
         nickname: nicknameFromDom || cookieState.nickname,
         avatar: avatarFromDom,
       };
@@ -2414,7 +2446,12 @@ const oschinaDetector: PlatformAuthDetector = {
     }
     
     // 4. 从 DOM 中提取用户信息
-    const domUser = extractUserFromDom();
+    // my.oschina.net 页面可能需要短时间渲染侧边栏（用户信息卡片），这里做一次短等待以提升稳定性
+    const domUser =
+      (await waitForValue(() => {
+        const user = extractUserFromDom();
+        return user.userId || user.nickname || user.avatar ? user : undefined;
+      }, { timeoutMs: 2000 })) || extractUserFromDom();
     if (domUser.userId || domUser.nickname || domUser.avatar) {
       log('oschina', '从 DOM 获取到用户信息', domUser);
       return await reconcileWithBackground({

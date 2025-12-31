@@ -201,7 +201,7 @@ interface PlatformApiConfig {
  */
 async function fetchWithCookies(url: string, options: RequestInit = {}, maxRetries = 1): Promise<Response> {
   let lastError: Error | null = null;
-  
+
   for (let i = 0; i <= maxRetries; i++) {
     try {
       const res = await fetch(url, {
@@ -221,7 +221,7 @@ async function fetchWithCookies(url: string, options: RequestInit = {}, maxRetri
       }
     }
   }
-  
+
   throw lastError || new Error('请求失败');
 }
 
@@ -229,54 +229,54 @@ async function fetchWithCookies(url: string, options: RequestInit = {}, maxRetri
  * 智能解析 API 响应，区分错误类型
  */
 async function parseApiResponse(
-  res: Response, 
+  res: Response,
   platform: string,
   parseJson: (data: any) => UserInfo | null
 ): Promise<UserInfo> {
   const contentType = res.headers.get('content-type') || '';
-  
+
   // 1. 检查 HTTP 状态码
   if (res.status === 401 || res.status === 403) {
-    return { 
-      loggedIn: false, 
-      platform, 
+    return {
+      loggedIn: false,
+      platform,
       errorType: AuthErrorType.LOGGED_OUT,
       error: '登录已失效',
       retryable: false
     };
   }
-  
+
   if (res.status === 429) {
-    return { 
-      loggedIn: false, 
-      platform, 
+    return {
+      loggedIn: false,
+      platform,
       errorType: AuthErrorType.RATE_LIMITED,
       error: '请求过于频繁',
-      retryable: true 
+      retryable: true
     };
   }
-  
+
   if (res.status >= 500) {
-    return { 
-      loggedIn: false, 
-      platform, 
+    return {
+      loggedIn: false,
+      platform,
       errorType: AuthErrorType.API_ERROR,
       error: `服务暂时不可用 (${res.status})`,
-      retryable: true 
+      retryable: true
     };
   }
-  
+
   // 2. 404 不一定是登录失效，可能是 API 变更
   if (res.status === 404) {
-    return { 
-      loggedIn: false, 
-      platform, 
+    return {
+      loggedIn: false,
+      platform,
       errorType: AuthErrorType.API_ERROR,
       error: 'API 接口不可用',
-      retryable: true 
+      retryable: true
     };
   }
-  
+
   // 3. 400 错误需要进一步分析
   if (res.status === 400) {
     try {
@@ -288,86 +288,86 @@ async function parseApiResponse(
         if (data.code === 401 || data.code === -101 || data.message?.includes('登录')) {
           return { loggedIn: false, platform, errorType: AuthErrorType.LOGGED_OUT, error: '需要登录' };
         }
-      } catch {}
-      return { 
-        loggedIn: false, 
-        platform, 
+      } catch { }
+      return {
+        loggedIn: false,
+        platform,
         errorType: AuthErrorType.API_ERROR,
         error: '请求参数错误',
-        retryable: true 
+        retryable: true
       };
     } catch {
       return { loggedIn: false, platform, errorType: AuthErrorType.API_ERROR, error: 'HTTP 400', retryable: true };
     }
   }
-  
+
   // 4. 检查响应内容类型
   if (!contentType.includes('application/json') && !contentType.includes('text/json')) {
     try {
       const text = await res.text();
-      
+
       // 检查是否是 HTML 登录页面
       if (text.includes('<!DOCTYPE') || text.includes('<html')) {
-        const isLoginPage = 
-          text.includes('登录') || 
-          text.includes('login') || 
+        const isLoginPage =
+          text.includes('登录') ||
+          text.includes('login') ||
           text.includes('sign in') ||
           text.includes('signin') ||
           text.includes('请先登录');
-        
+
         if (isLoginPage) {
-          return { 
-            loggedIn: false, 
-            platform, 
+          return {
+            loggedIn: false,
+            platform,
             errorType: AuthErrorType.LOGGED_OUT,
             error: '需要重新登录',
             retryable: false
           };
         }
-        
+
         // 其他 HTML 响应视为 API 错误
-        return { 
-          loggedIn: false, 
-          platform, 
+        return {
+          loggedIn: false,
+          platform,
           errorType: AuthErrorType.API_ERROR,
           error: '接口返回格式异常',
-          retryable: true 
+          retryable: true
         };
       }
-      
+
       // 尝试解析为 JSON（有些服务器 content-type 设置不正确）
       try {
         const data = JSON.parse(text);
         const result = parseJson(data);
         if (result) return result;
-      } catch {}
-      
+      } catch { }
+
     } catch (e) {
-      return { 
-        loggedIn: false, 
-        platform, 
+      return {
+        loggedIn: false,
+        platform,
         errorType: AuthErrorType.API_ERROR,
         error: '响应解析失败',
-        retryable: true 
+        retryable: true
       };
     }
   }
-  
+
   // 5. 正常解析 JSON
   try {
     const data = await res.json();
     const result = parseJson(data);
     if (result) return result;
-    
+
     // parseJson 返回 null 表示未登录
     return { loggedIn: false, platform, errorType: AuthErrorType.LOGGED_OUT, error: '未登录' };
   } catch (e) {
-    return { 
-      loggedIn: false, 
-      platform, 
+    return {
+      loggedIn: false,
+      platform,
       errorType: AuthErrorType.API_ERROR,
       error: 'JSON 解析失败',
-      retryable: true 
+      retryable: true
     };
   }
 }
@@ -391,20 +391,20 @@ function getCookieEarliestExpiration(
   sessionCookieNames: string[]
 ): number | undefined {
   const sessionCookieNameSet = new Set(sessionCookieNames.map(n => n.toLowerCase()));
-  
+
   let earliestExpiration: number | undefined;
-  
+
   for (const cookie of cookies) {
     // 只检查会话 Cookie
     if (!sessionCookieNameSet.has(cookie.name.toLowerCase())) {
       continue;
     }
-    
+
     // 跳过无效值的 Cookie
     if (!cookie.value || cookie.value.trim().toLowerCase() === 'deleted') {
       continue;
     }
-    
+
     // expirationDate 是秒级时间戳，需要转换为毫秒
     // 如果没有 expirationDate，说明是 session cookie（浏览器关闭时失效）
     if (cookie.expirationDate) {
@@ -414,7 +414,7 @@ function getCookieEarliestExpiration(
       }
     }
   }
-  
+
   return earliestExpiration;
 }
 
@@ -433,41 +433,41 @@ export async function getPlatformCookieExpiration(platform: string): Promise<{
   isExpiringSoon?: boolean;  // 是否即将过期（24小时内）
 }> {
   const config = COOKIE_CONFIGS[platform];
-  
+
   if (!config) {
     return { hasValidCookies: false };
   }
-  
+
   try {
     const urls = [config.url, ...(config.fallbackUrls || [])];
     const allCookies: chrome.cookies.Cookie[] = [];
-    
+
     for (const url of urls) {
       try {
         const cookies = await chrome.cookies.getAll({ url });
         allCookies.push(...cookies);
-      } catch {}
+      } catch { }
     }
-    
+
     const sessionCookieNameSet = new Set(config.sessionCookies.map(n => n.toLowerCase()));
     const isValidCookieValue = (value?: string) => {
       if (!value) return false;
       const trimmed = value.trim().toLowerCase();
       return trimmed && trimmed !== 'deleted' && trimmed !== 'null' && trimmed !== 'undefined';
     };
-    
+
     const hasValidCookies = allCookies.some(
       cookie => sessionCookieNameSet.has(cookie.name.toLowerCase()) && isValidCookieValue(cookie.value)
     );
-    
+
     if (!hasValidCookies) {
       return { hasValidCookies: false };
     }
-    
+
     const cookieExpiresAt = getCookieEarliestExpiration(allCookies, config.sessionCookies);
     const now = Date.now();
     const EXPIRING_SOON_THRESHOLD = 24 * 60 * 60 * 1000; // 24小时
-    
+
     return {
       hasValidCookies: true,
       cookieExpiresAt,
@@ -496,7 +496,7 @@ export async function getPlatformCookieExpiration(platform: string): Promise<{
  */
 export async function detectViaCookies(platform: string): Promise<UserInfo> {
   const config = COOKIE_CONFIGS[platform];
-  
+
   if (!config) {
     logger.warn('cookie-detect', `平台 ${platform} 未配置 Cookie 检测`);
     return {
@@ -508,7 +508,7 @@ export async function detectViaCookies(platform: string): Promise<UserInfo> {
       detectionMethod: 'cookie',
     };
   }
-  
+
   const isValidCookieValue = (value?: string) => {
     if (!value) return false;
     const trimmed = value.trim();
@@ -523,7 +523,7 @@ export async function detectViaCookies(platform: string): Promise<UserInfo> {
     // 收集所有 URL 的 Cookie
     const urls = [config.url, ...(config.fallbackUrls || [])];
     const allCookies: chrome.cookies.Cookie[] = [];
-    
+
     for (const url of urls) {
       try {
         const cookies = await chrome.cookies.getAll({ url });
@@ -532,17 +532,17 @@ export async function detectViaCookies(platform: string): Promise<UserInfo> {
         logger.warn('cookie-detect', `获取 ${url} 的 Cookie 失败`, { error: e?.message || String(e) });
       }
     }
-    
+
     // 检查是否存在任一配置的会话 Cookie 且值有效
     // 注意：不能用 name@domain 做损失性去重，否则可能优先命中 path/partitionKey 不同的 "deleted" Cookie，导致误判未登录
     const hasValidSession = allCookies.some(
       (cookie) => matchesSessionCookieName(cookie.name) && isValidCookieValue(cookie.value)
     );
-    
+
     if (hasValidSession) {
       // 计算 Cookie 最早过期时间
       const cookieExpiresAt = getCookieEarliestExpiration(allCookies, config.sessionCookies);
-      
+
       logger.info('cookie-detect', `${platform} Cookie 检测成功，存在有效会话`, {
         cookieExpiresAt: cookieExpiresAt ? new Date(cookieExpiresAt).toISOString() : 'session'
       });
@@ -594,7 +594,7 @@ export function shouldFallbackToCookie(userInfo: UserInfo): boolean {
   if (userInfo.loggedIn) {
     return false;
   }
-  
+
   // 主检测本身就是 Cookie/页面探针时，不再做 Cookie 回退（避免重复/误导日志）
   if (userInfo.detectionMethod === 'cookie' || userInfo.detectionMethod === 'html') {
     return false;
@@ -604,7 +604,7 @@ export function shouldFallbackToCookie(userInfo: UserInfo): boolean {
   if (userInfo.errorType === AuthErrorType.LOGGED_OUT) {
     return false;
   }
-  
+
   // 可重试的错误应该尝试 Cookie 回退
   return userInfo.retryable === true;
 }
@@ -625,28 +625,28 @@ export async function fetchUserInfoWithFallback(
   if (!primaryResult.detectionMethod) {
     primaryResult.detectionMethod = 'api';
   }
-  
+
   // 2. 如果成功或明确登出，直接返回
   if (!shouldFallbackToCookie(primaryResult)) {
     return primaryResult;
   }
-  
+
   // 3. 检查是否配置了 Cookie 检测
   if (!COOKIE_CONFIGS[platform]) {
     logger.info('fallback', `${platform} 未配置 Cookie 检测，跳过回退`);
     return primaryResult;
   }
-  
+
   // 4. 尝试 Cookie 回退检测
   logger.info('fallback', `${platform} API 检测失败 (${primaryResult.error})，尝试 Cookie 回退`);
   const cookieResult = await detectViaCookies(platform);
-  
+
   // 5. 如果 Cookie 检测成功，返回成功结果
   if (cookieResult.loggedIn) {
     logger.info('fallback', `${platform} Cookie 回退检测成功`);
     return cookieResult;
   }
-  
+
   // 6. 两种检测都失败，返回原始 API 错误（保留更多信息）
   logger.info('fallback', `${platform} Cookie 回退检测也失败`);
   return primaryResult;
@@ -662,7 +662,7 @@ const juejinApi: PlatformApiConfig = {
   async fetchUserInfo(): Promise<UserInfo> {
     try {
       const res = await fetchWithCookies('https://api.juejin.cn/user_api/v1/user/get');
-      
+
       return parseApiResponse(res, 'juejin', (data) => {
         if (data.err_no === 0 && data.data) {
           const user = data.data;
@@ -811,11 +811,11 @@ const csdnApi: PlatformApiConfig = {
           'Referer': 'https://me.csdn.net/',
         },
       });
-      
+
       if (res.ok) {
         const data = await res.json();
         logger.info('csdn', 'API 响应', data);
-        
+
         const payload = data?.data || data?.result || data;
         const okCode =
           data?.code === 200 ||
@@ -871,7 +871,7 @@ const csdnApi: PlatformApiConfig = {
     } catch (e: any) {
       logger.warn('csdn', 'API 调用失败', { error: e.message });
     }
-    
+
     // 备用 API
     try {
       const res = await fetchWithCookies('https://blog.csdn.net/community/home-api/v1/get-business-info', {
@@ -883,7 +883,7 @@ const csdnApi: PlatformApiConfig = {
       if (res.ok) {
         const data = await res.json();
         logger.info('csdn', '备用 API 响应', data);
-        
+
         const payload = data?.data || data?.result || data;
         const okCode =
           data?.code === 200 ||
@@ -934,7 +934,7 @@ const csdnApi: PlatformApiConfig = {
     } catch (e: any) {
       logger.warn('csdn', '备用 API 调用失败', { error: e.message });
     }
-    
+
     // API 失败，使用 Cookie 检测
     const mainCookies = await chrome.cookies.getAll({ url: 'https://www.csdn.net/' });
     const meCookies = await chrome.cookies.getAll({ url: 'https://me.csdn.net/' });
@@ -942,7 +942,7 @@ const csdnApi: PlatformApiConfig = {
     const passportCookies = await chrome.cookies.getAll({ url: 'https://passport.csdn.net/' });
     const iCookies = await chrome.cookies.getAll({ url: 'https://i.csdn.net/' });
     const allCookies = [...mainCookies, ...meCookies, ...blogCookies, ...passportCookies, ...iCookies];
-    
+
     // 去重
     const uniqueCookies = new Map<string, chrome.cookies.Cookie>();
     for (const c of allCookies) {
@@ -951,78 +951,71 @@ const csdnApi: PlatformApiConfig = {
       }
     }
     const cookies = Array.from(uniqueCookies.values());
-    
-    logger.info('csdn', '获取到的 Cookie', { 
+
+    logger.info('csdn', '获取到的 Cookie', {
       count: cookies.length,
       names: cookies.map(c => c.name)
     });
-    
+
     // CSDN 的关键 Cookie - 检查多种可能的登录标识
     // 1. 明确的用户标识 Cookie
     const userNameCookie = cookies.find(c => c.name === 'UserName' && c.value && c.value.length > 0);
     const userInfoCookie = cookies.find(c => c.name === 'UserInfo' && c.value && c.value.length > 0);
     const userTokenCookie = cookies.find(c => c.name === 'UserToken' && c.value && c.value.length > 0);
     const unCookie = cookies.find(c => c.name === 'UN' && c.value && c.value.length > 0);
-    
+
     // 2. 登录后才有的 Cookie
     const cSegmentCookie = cookies.find(c => c.name === 'c_segment' && c.value && c.value.length > 0);
     const creativeBtnCookie = cookies.find(c => c.name === 'creative_btn_mp' && c.value);
     const loginboxCookie = cookies.find(c => c.name === 'loginbox_strategy' && c.value);
     const sessionCookie = cookies.find(c => c.name === 'SESSION' && c.value && c.value.length > 10);
     const dcSessionCookie = cookies.find(c => c.name === 'dc_session_id' && c.value && c.value.length > 10);
-    
+
     // 3. 日志相关 Cookie（登录用户才会有这些）
     const logIdClickCookie = cookies.find(c => c.name === 'log_Id_click' && c.value);
     const logIdPvCookie = cookies.find(c => c.name === 'log_Id_pv' && c.value);
     const logIdViewCookie = cookies.find(c => c.name === 'log_Id_view' && c.value);
-    
+
     // 4. 检查是否有任何看起来像登录状态的 Cookie
     // CSDN 可能使用不同的 Cookie 名称，所以我们检查是否有任何包含 user/User/login/Login 的 Cookie
     const hasUserRelatedCookie = cookies.some(c => {
       const nameLower = c.name.toLowerCase();
       return (nameLower.includes('user') || nameLower.includes('login') || nameLower.includes('token') || nameLower.includes('session')) &&
-             c.value && c.value.length > 5;
+        c.value && c.value.length > 5;
     });
-    
+
     // 优先检查明确的用户标识 Cookie
     const hasUserCookie = userNameCookie || userInfoCookie || userTokenCookie || unCookie;
     // 其次检查登录后才有的 Cookie
-    const hasSessionCookie = cSegmentCookie || creativeBtnCookie || loginboxCookie || 
-                             sessionCookie || dcSessionCookie;
+    const hasSessionCookie = cSegmentCookie || creativeBtnCookie || loginboxCookie ||
+      sessionCookie || dcSessionCookie;
     // 最后检查日志相关 Cookie
     const hasLogCookie = logIdClickCookie || logIdPvCookie || logIdViewCookie;
-    
+
     const hasValidSession = hasUserCookie || hasSessionCookie || hasLogCookie || hasUserRelatedCookie;
-    
+
     if (hasValidSession) {
       // 尝试从 Cookie 获取用户名
-      const userId = userNameCookie?.value ? decodeURIComponent(userNameCookie.value) : 
-                     unCookie?.value ? decodeURIComponent(unCookie.value) : undefined;
+      const userId = userNameCookie?.value ? decodeURIComponent(userNameCookie.value) :
+        unCookie?.value ? decodeURIComponent(unCookie.value) : undefined;
 
-      let nickname: string | undefined = userId ? userId : undefined;
-      let avatar: string | undefined;
-
-      if (userId) {
-        const profile = await fetchProfileFromHtml(userId);
-        if (profile?.nickname) nickname = profile.nickname;
-        if (profile?.avatar) avatar = profile.avatar;
-      }
-      
+      // 快速返回，不等待 HTML 抓取
+      // 昵称将由 account-service 的 enrichAccountInfo 异步补全
       logger.info('csdn', '检测到有效的登录 Cookie，判定为已登录', { userId });
       return {
         loggedIn: true,
         platform: 'csdn',
         userId: userId,
-        nickname: nickname || userId || 'CSDN用户',
-        avatar: avatar || undefined,
+        nickname: userId || 'CSDN用户',  // 临时使用 userId，后续异步补全
+        avatar: undefined,
         detectionMethod: 'cookie',
       };
     }
-    
+
     logger.info('csdn', '未找到有效的登录 Cookie');
-    return { 
-      loggedIn: false, 
-      platform: 'csdn', 
+    return {
+      loggedIn: false,
+      platform: 'csdn',
       errorType: AuthErrorType.LOGGED_OUT,
       error: '登录已过期',
       retryable: false
@@ -1036,7 +1029,7 @@ const zhihuApi: PlatformApiConfig = {
   async fetchUserInfo(): Promise<UserInfo> {
     try {
       const res = await fetchWithCookies('https://www.zhihu.com/api/v4/me');
-      
+
       return parseApiResponse(res, 'zhihu', (data) => {
         if (data.id) {
           return {
@@ -1066,7 +1059,7 @@ const bilibiliApi: PlatformApiConfig = {
   async fetchUserInfo(): Promise<UserInfo> {
     try {
       const res = await fetchWithCookies('https://api.bilibili.com/x/web-interface/nav');
-      
+
       return parseApiResponse(res, 'bilibili', (data) => {
         if (data.code === 0 && data.data?.isLogin) {
           const user = data.data;
@@ -1148,7 +1141,7 @@ const jianshuApi: PlatformApiConfig = {
           'Referer': 'https://www.jianshu.com/',
         },
       });
-      
+
       if (res.ok) {
         const data = await res.json();
         const payload = data?.data || data?.result || data;
@@ -1176,19 +1169,19 @@ const jianshuApi: PlatformApiConfig = {
     } catch (e: any) {
       logger.warn('jianshu', 'API 调用失败', { error: e.message });
     }
-    
+
     // API 失败，使用 Cookie 检测
     const cookies = await chrome.cookies.getAll({ url: 'https://www.jianshu.com/' });
-    logger.info('jianshu', '获取到的 Cookie', { 
+    logger.info('jianshu', '获取到的 Cookie', {
       count: cookies.length,
       names: cookies.map(c => c.name)
     });
-    
+
     // 简书的关键 Cookie
     const rememberToken = cookies.find(c => c.name === 'remember_user_token' && c.value && c.value.length > 10);
     const sessionCore = cookies.find(c => c.name === '_m7e_session_core' && c.value && c.value.length > 10);
     const sensorsData = cookies.find(c => c.name.includes('sensorsdata') && c.value);
-    
+
     if (rememberToken || sessionCore || sensorsData) {
       logger.info('jianshu', '检测到有效的登录 Cookie，判定为已登录');
 
@@ -1217,11 +1210,11 @@ const jianshuApi: PlatformApiConfig = {
         detectionMethod: 'cookie',
       };
     }
-    
+
     logger.info('jianshu', '未找到有效的登录 Cookie');
-    return { 
-      loggedIn: false, 
-      platform: 'jianshu', 
+    return {
+      loggedIn: false,
+      platform: 'jianshu',
       errorType: AuthErrorType.LOGGED_OUT,
       error: '登录已过期',
       retryable: false
@@ -1291,16 +1284,16 @@ const cnblogsApi: PlatformApiConfig = {
       }
       return undefined;
     };
-    
+
     for (const endpoint of apiEndpoints) {
       try {
         const res = await fetchWithCookies(endpoint, {
-          headers: { 
+          headers: {
             'Accept': 'application/json',
             'Referer': 'https://www.cnblogs.com/',
           },
         });
-        
+
         if (res.ok) {
           const text = await res.text();
           const preview = text.substring(0, 500);
@@ -1310,47 +1303,47 @@ const cnblogsApi: PlatformApiConfig = {
           if (preview.trim().startsWith('<')) {
             continue;
           }
-          
+
           try {
             const data = JSON.parse(text);
             const userData = data?.data || data?.result || data?.content || data;
 
             const isBlogApp = (value: unknown): value is string =>
               typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{2,}$/.test(value);
-            
+
             // 检查是否有用户信息 - blogApp 是关键字段
             const blogApp = isBlogApp(userData?.blogApp) ? userData.blogApp
               : isBlogApp(data?.blogApp) ? data.blogApp
-              : isBlogApp(userData?.userId) ? userData.userId
-              : isBlogApp(data?.userId) ? data.userId
-              : undefined;
+                : isBlogApp(userData?.userId) ? userData.userId
+                  : isBlogApp(data?.userId) ? data.userId
+                    : undefined;
 
             const displayName = userData?.displayName || userData?.DisplayName || data?.displayName || data?.DisplayName;
             const nickname = displayName || blogApp || userData?.nickname || userData?.name || '博客园用户';
             const avatar =
               normalizeUrl(
                 userData?.avatar ||
-                  userData?.avatarUrl ||
-                  userData?.avatarURL ||
-                  userData?.avatar_url ||
-                  userData?.Avatar ||
-                  userData?.AvatarUrl ||
-                  userData?.portrait ||
-                  userData?.icon ||
-                  userData?.face ||
-                  data?.avatar ||
-                  data?.avatarUrl ||
-                  data?.avatarURL ||
-                  data?.avatar_url ||
-                  data?.Avatar ||
-                  data?.AvatarUrl
+                userData?.avatarUrl ||
+                userData?.avatarURL ||
+                userData?.avatar_url ||
+                userData?.Avatar ||
+                userData?.AvatarUrl ||
+                userData?.portrait ||
+                userData?.icon ||
+                userData?.face ||
+                data?.avatar ||
+                data?.avatarUrl ||
+                data?.avatarURL ||
+                data?.avatar_url ||
+                data?.Avatar ||
+                data?.AvatarUrl
               ) || undefined;
 
             if (blogApp) {
               const avatarFromHome = avatar || (await tryFetchAvatarFromHome(blogApp));
-              logger.info('cnblogs', '从 API 获取到用户信息', { 
-                blogApp, 
-                displayName: nickname 
+              logger.info('cnblogs', '从 API 获取到用户信息', {
+                blogApp,
+                displayName: nickname
               });
               return {
                 loggedIn: true,
@@ -1362,7 +1355,7 @@ const cnblogsApi: PlatformApiConfig = {
                 detectionMethod: 'api',
               };
             }
-            
+
             // 如果能解析出昵称/头像，也视为已登录（但可能拿不到 blogApp）
             if (nickname && nickname !== '博客园用户') {
               logger.info('cnblogs', '检测到登录但无 blogApp', { endpoint, nickname });
@@ -1382,7 +1375,7 @@ const cnblogsApi: PlatformApiConfig = {
         logger.warn('cnblogs', `API ${endpoint} 调用失败`, { error: e.message });
       }
     }
-    
+
     // API 失败，使用 Cookie 检测
     const cookies = await chrome.cookies.getAll({ url: 'https://www.cnblogs.com/' });
     const accountCookies = await chrome.cookies.getAll({ url: 'https://account.cnblogs.com/' });
@@ -1390,12 +1383,12 @@ const cnblogsApi: PlatformApiConfig = {
     const homeCookies = await chrome.cookies.getAll({ url: 'https://home.cnblogs.com/' });
     const iCookies = await chrome.cookies.getAll({ url: 'https://i.cnblogs.com/' });
     const allCookies = [...cookies, ...accountCookies, ...passportCookies, ...homeCookies, ...iCookies];
-    
-    logger.info('cnblogs', '获取到的 Cookie', { 
+
+    logger.info('cnblogs', '获取到的 Cookie', {
       count: allCookies.length,
       names: allCookies.map(c => c.name)
     });
-    
+
     // 博客园的关键 Cookie - 检查多种可能的登录标识
     // 1. .Cnblogs.AspNetCore.Cookies - 主要的认证 Cookie
     // 2. 任何包含 CNBlogs/Cnblogs/AspNetCore 的 Cookie
@@ -1410,15 +1403,15 @@ const cnblogsApi: PlatformApiConfig = {
     const hasValidSession = allCookies.some(c => {
       const name = c.name.toLowerCase();
       const nameMatches = name === '.cnblogs.aspnetcore.cookies' ||
-                          name.startsWith('.cnblogs.aspnetcore.cookies') || // Cookie chunking (C1/C2...)
-                          name === '.aspnetcore.cookies' ||
-                          name.startsWith('.aspnetcore.cookies') ||
-                          name.includes('cnblogscookie') ||
-                          (name.includes('aspnetcore') && name.includes('cookies')) ||
-                          (name.includes('cnblogs') && name.includes('cookie'));
+        name.startsWith('.cnblogs.aspnetcore.cookies') || // Cookie chunking (C1/C2...)
+        name === '.aspnetcore.cookies' ||
+        name.startsWith('.aspnetcore.cookies') ||
+        name.includes('cnblogscookie') ||
+        (name.includes('aspnetcore') && name.includes('cookies')) ||
+        (name.includes('cnblogs') && name.includes('cookie'));
       return nameMatches && isValidValue(c.value);
     });
-    
+
     if (hasValidSession) {
       logger.info('cnblogs', '检测到有效的登录 Cookie，判定为已登录');
       // Cookie 检测无法获取 blogApp，所以不设置 userId
@@ -1430,11 +1423,11 @@ const cnblogsApi: PlatformApiConfig = {
         detectionMethod: 'cookie',
       };
     }
-    
+
     logger.info('cnblogs', '未找到有效的登录 Cookie');
-    return { 
-      loggedIn: false, 
-      platform: 'cnblogs', 
+    return {
+      loggedIn: false,
+      platform: 'cnblogs',
       errorType: AuthErrorType.LOGGED_OUT,
       error: '登录已过期',
       retryable: false
@@ -1458,7 +1451,7 @@ const cto51Api: PlatformApiConfig = {
       'https://www.51cto.com/',
     ];
     const allCookies: chrome.cookies.Cookie[] = [];
-    
+
     for (const url of urls) {
       try {
         const cookies = await chrome.cookies.getAll({ url });
@@ -1494,7 +1487,7 @@ const cto51Api: PlatformApiConfig = {
       const lower = trimmed.toLowerCase();
       return lower !== 'deleted' && lower !== 'null' && lower !== 'undefined';
     };
-    
+
     const sessionCookieNames = [
       'pub_sauth1',
       'pub_sauth2',
@@ -1514,7 +1507,7 @@ const cto51Api: PlatformApiConfig = {
       'token',
     ];
     const sessionCookieNameSet = new Set(sessionCookieNames.map((n) => n.toLowerCase()));
-    
+
     const hasSessionCookie = allCookies.some(
       (c) => sessionCookieNameSet.has(c.name.toLowerCase()) && isValidValue(c.value)
     );
@@ -1537,12 +1530,12 @@ const cto51Api: PlatformApiConfig = {
         nameLower.includes('user')
       );
     });
-    
-    logger.info('51cto', 'Cookie scan', { 
+
+    logger.info('51cto', 'Cookie scan', {
       count: allCookies.length,
       names: Array.from(new Set(allCookies.map((c) => c.name))).slice(0, 30),
     });
-    
+
     if (hasSessionCookie || hasUserRelatedCookie) {
       const pickUserId = () => {
         const priority = ['uid', 'user_id', 'pub_sid', 'pub_loginuser', 'login_account'];
@@ -1559,7 +1552,7 @@ const cto51Api: PlatformApiConfig = {
         return undefined;
       };
       const userId = pickUserId();
-      
+
       return {
         loggedIn: true,
         platform: '51cto',
@@ -1631,7 +1624,7 @@ const cto51Api: PlatformApiConfig = {
     } catch (e: any) {
       logger.warn('51cto', 'HTML probe failed', { error: e?.message || String(e) });
     }
-    
+
     // 51CTO 的登录 Cookie 结构变动较频繁，且部分 Cookie 可能是分区/分路径的；
     // 在无法确认“确实登出”时，宁可返回可重试的异常，也不要误判为已登出并触发重新登录。
     return {
@@ -1655,7 +1648,7 @@ const tencentCloudApi: PlatformApiConfig = {
       'https://cloud.tencent.com/developer/api/user/info',
       'https://cloud.tencent.com/developer/api/user/current',
     ];
-    
+
     for (const endpoint of apiEndpoints) {
       try {
         const res = await fetchWithCookies(endpoint, {
@@ -1664,16 +1657,16 @@ const tencentCloudApi: PlatformApiConfig = {
             'Referer': 'https://cloud.tencent.com/',
           },
         });
-        
+
         if (res.ok) {
           const data = await res.json();
           logger.info('tencent-cloud', `API ${endpoint} 响应`, data);
-          
+
           if ((data.code === 0 || data.ret === 0) && data.data) {
             const user = data.data;
             const userId = String(user.uin || user.uid || user.id || '');
             const nickname = user.name || user.nickname || user.nick;
-            
+
             if (userId) {
               logger.info('tencent-cloud', '从 API 获取到用户信息', { userId, nickname });
               return {
@@ -1691,17 +1684,17 @@ const tencentCloudApi: PlatformApiConfig = {
         logger.warn('tencent-cloud', `API ${endpoint} 调用失败`, { error: e.message });
       }
     }
-    
+
     // API 失败，使用 Cookie 检测
     const cookies = await chrome.cookies.getAll({ url: 'https://cloud.tencent.com/' });
     const developerCookies = await chrome.cookies.getAll({ url: 'https://cloud.tencent.com/developer/' });
     const allCookies = [...cookies, ...developerCookies];
-    
-    logger.info('tencent-cloud', '获取到的 Cookie', { 
+
+    logger.info('tencent-cloud', '获取到的 Cookie', {
       count: allCookies.length,
       names: allCookies.map(c => c.name)
     });
-    
+
     // 腾讯云的关键 Cookie - 检查多种可能的登录标识
     // uin/p_uin 是用户 ID，skey/p_skey 是会话密钥
     // 也检查 qcloud_uid, intl, language 等腾讯云特有的 Cookie
@@ -1716,16 +1709,16 @@ const tencentCloudApi: PlatformApiConfig = {
     const loginTypeCookie = allCookies.find(c => c.name === 'loginType' && c.value);
     // 检查 ownerUin（所有者 ID）
     const ownerUinCookie = allCookies.find(c => c.name === 'ownerUin' && c.value && c.value.length > 3);
-    
+
     const hasValidSession = uinCookie || skeyCookie || qcloudUidCookie || csrfCookie || loginTypeCookie || ownerUinCookie;
-    
+
     if (hasValidSession) {
       // 尝试从 uin Cookie 获取用户 ID
       // uin 格式可能是 o123456789，需要去掉前缀 o
-      let userId = uinCookie?.value?.replace(/^o/, '') || 
-                   ownerUinCookie?.value?.replace(/^o/, '') ||
-                   qcloudUidCookie?.value || undefined;
-      
+      let userId = uinCookie?.value?.replace(/^o/, '') ||
+        ownerUinCookie?.value?.replace(/^o/, '') ||
+        qcloudUidCookie?.value || undefined;
+
       logger.info('tencent-cloud', '检测到有效的登录 Cookie，判定为已登录', { userId });
       // Cookie 检测可能无法获取正确的 userId，所以不设置 userId
       // 这样点击用户名时会跳转到用户中心而不是错误的主页
@@ -1738,11 +1731,11 @@ const tencentCloudApi: PlatformApiConfig = {
         detectionMethod: 'cookie',
       };
     }
-    
+
     logger.info('tencent-cloud', '未找到有效的登录 Cookie');
-    return { 
-      loggedIn: false, 
-      platform: 'tencent-cloud', 
+    return {
+      loggedIn: false,
+      platform: 'tencent-cloud',
       errorType: AuthErrorType.LOGGED_OUT,
       error: '登录已过期',
       retryable: false
@@ -1837,7 +1830,7 @@ const segmentfaultApi: PlatformApiConfig = {
     // 1. 首先尝试 /api/users/-/info 接口（思否新版 API）
     // 2. 然后尝试 /api/user/info 接口
     // 3. 最后尝试从主页 HTML 中提取用户信息
-    
+
     // 方法1: 尝试思否用户信息 API
     const normalizeUrl = (url?: unknown): string | undefined => {
       const candidate =
@@ -1871,7 +1864,7 @@ const segmentfaultApi: PlatformApiConfig = {
       'https://segmentfault.com/api/user/-/info',
       'https://segmentfault.com/gateway/user/-/info',
     ];
-    
+
     for (const endpoint of apiEndpoints) {
       try {
         const res = await fetchWithCookies(endpoint, {
@@ -1881,7 +1874,7 @@ const segmentfaultApi: PlatformApiConfig = {
             'X-Requested-With': 'XMLHttpRequest',
           },
         });
-        
+
         if (res.ok) {
           const text = await res.text();
           // 检查是否是 HTML（重定向到登录页）
@@ -1889,14 +1882,14 @@ const segmentfaultApi: PlatformApiConfig = {
             logger.info('segmentfault', `API ${endpoint} 返回 HTML，跳过`);
             continue;
           }
-          
+
           try {
             const data = JSON.parse(text);
             // 兼容多种响应格式
             const user = data.data || data.user || data;
-            const isSuccess = data.status === 0 || data.code === 0 || data.success === true || 
-                             (user && (user.id || user.uid || user.slug || user.name));
-            
+            const isSuccess = data.status === 0 || data.code === 0 || data.success === true ||
+              (user && (user.id || user.uid || user.slug || user.name));
+
             if (isSuccess && user && (user.id || user.uid || user.slug || user.name)) {
               let userId =
                 normalizeSlug(user.slug) ||
@@ -1922,9 +1915,9 @@ const segmentfaultApi: PlatformApiConfig = {
                     userId = userId || htmlResult.userId;
                     avatar = avatar || htmlResult.avatar;
                   }
-                } catch {}
+                } catch { }
               }
-              
+
               logger.info('segmentfault', `从 API ${endpoint} 获取到用户信息`, { userId, nickname });
               return {
                 loggedIn: true,
@@ -1947,7 +1940,7 @@ const segmentfaultApi: PlatformApiConfig = {
         logger.warn('segmentfault', `API ${endpoint} 调用失败`, { error: e.message });
       }
     }
-    
+
     // 方法2: 从思否主页 HTML 中提取用户信息
     logger.info('segmentfault', 'API 检测失败，尝试从 HTML 提取用户信息');
     try {
@@ -1958,7 +1951,7 @@ const segmentfaultApi: PlatformApiConfig = {
     } catch (e: any) {
       logger.warn('segmentfault', 'HTML 提取失败', { error: e.message });
     }
-    
+
     // 方法3: 使用 Cookie 检测（只能判断登录状态，无法获取用户信息）
     logger.info('segmentfault', 'HTML 提取失败，尝试 Cookie 检测');
     return detectViaCookies('segmentfault');
@@ -2029,9 +2022,9 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
     const menuHtml =
       hasUserMenuMarker
         ? headerHtml.substring(
-            Math.max(0, userMenuMarkerIndex - 6000),
-            Math.min(headerHtml.length, userMenuMarkerIndex + 6000)
-          )
+          Math.max(0, userMenuMarkerIndex - 6000),
+          Math.min(headerHtml.length, userMenuMarkerIndex + 6000)
+        )
         : headerHtml;
 
     const normalizeUrl = (url?: unknown): string | undefined => {
@@ -2215,7 +2208,7 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
           const info = buildUserInfo(candidate, '从 __NEXT_DATA__ 获取到用户信息');
           if (info) return info;
         }
-      } catch {}
+      } catch { }
     }
 
     // 3. 尝试从 script 标签中的 JSON 数据提取
@@ -2230,7 +2223,7 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
           const user = JSON.parse(match[1]);
           const info = buildUserInfo(user, '从 script JSON 获取到用户信息');
           if (info) return info;
-        } catch {}
+        } catch { }
       }
     }
 
@@ -2256,12 +2249,28 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
     }
 
     if (!avatar && sourceLabel === 'settings') {
-      const avatarMatch =
-        html.match(/<img[^>]+class="[^"]*(?:avatar|user-avatar)[^"]*"[^>]+src=["']([^"']+)["']/i) ||
-        html.match(/data-avatar=["']([^"']+)["']/i);
-      const value = avatarMatch?.[1];
-      if (value && !/default|placeholder/i.test(value)) {
-        avatar = normalizeUrl(value);
+      // settings 页面头像提取：更精确地匹配用户头像
+      const settingsAvatarPatterns = [
+        // 设置页面的头像上传区域
+        /<img[^>]+class="[^"]*(?:avatar|user-avatar|profile-avatar)[^"]*"[^>]+src=["']([^"']+)["']/i,
+        /<img[^>]+src=["']([^"']+)["'][^>]+class="[^"]*(?:avatar|user-avatar|profile-avatar)[^"]*"/i,
+        // 用户信息区域的头像
+        /<div[^>]*class="[^"]*(?:user-info|profile-info|avatar-container)[^"]*"[^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/i,
+        // data-avatar 属性
+        /data-avatar=["']([^"']+)["']/i,
+        // 思否 CDN 头像链接
+        /<img[^>]+src=["'](https?:\/\/[^"']*(?:avatar|static)[^"']*segmentfault[^"']*\.(?:jpg|jpeg|png|gif|webp)[^"']*)["']/i,
+      ];
+
+      for (const pattern of settingsAvatarPatterns) {
+        const match = html.match(pattern);
+        if (match?.[1]) {
+          const url = match[1].trim();
+          if (url && !/default|placeholder|logo|icon|banner/i.test(url)) {
+            avatar = normalizeUrl(url);
+            if (avatar) break;
+          }
+        }
       }
     }
 
@@ -2358,8 +2367,13 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
       }
     }
 
-    // 4. 如果有用户 slug，尝试从用户主页获取真实用户名
-    if (userId && !nickname) {
+    // 4. 如果有用户 slug，尽量从用户主页获取权威昵称/头像（最稳定，避免误抓页面其他用户）
+    // settings 页是最可靠的入口：一旦拿到 slug，就用用户主页校准昵称/头像
+    const shouldFetchProfile =
+      !!userId &&
+      (sourceLabel === 'settings' || !nickname || !avatar || !isValidNickname(nickname) || isSlugLike(nickname));
+
+    if (shouldFetchProfile) {
       try {
         const userPageRes = await fetchWithCookies(`https://segmentfault.com/u/${userId}`, {
           headers: {
@@ -2398,13 +2412,37 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
             }
           }
 
-          // 如果还没有头像，尝试从用户主页提取
-          if (!avatar) {
-            const userAvatarMatch =
-              userPageHtml.match(/<img[^>]+class="[^"]*avatar[^"]*"[^>]+(?:src|data-src)=["']([^"']+)["']/i) ||
-              userPageHtml.match(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]+class="[^"]*avatar[^"]*"/i);
-            if (userAvatarMatch?.[1] && !/default|placeholder/i.test(userAvatarMatch[1])) {
-              avatar = normalizeUrl(userAvatarMatch[1]);
+          // 头像：以用户主页为准（可覆盖 header 里误抓到的头像）
+          // 思否用户主页头像通常在 .userinfo 或 .card-body 区域
+          const userAvatarPatterns = [
+            // userinfo 区域内的头像（最可靠）
+            /<div[^>]*class="[^"]*userinfo[^"]*"[^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["']([^"']+)["']/i,
+            // card-body 内的头像
+            /<div[^>]*class="[^"]*card-body[^"]*"[^>]*>[\s\S]*?<img[^>]+(?:src|data-src)=["']([^"']+)["']/i,
+            // 带 avatar 类的图片
+            /<img[^>]+class="[^"]*avatar[^"]*"[^>]+(?:src|data-src)=["']([^"']+)["']/i,
+            /<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]+class="[^"]*avatar[^"]*"/i,
+            // 用户头像图片（segmentfault CDN）
+            /<img[^>]+(?:src|data-src)=["'](https?:\/\/[^"']*(?:avatar|user)[^"']*\.(?:jpg|jpeg|png|gif|webp)[^"']*)["']/i,
+            // og:image meta 标签
+            /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+          ];
+
+          for (const pattern of userAvatarPatterns) {
+            const match = userPageHtml.match(pattern);
+            if (match?.[1]) {
+              const url = match[1].trim();
+              // 验证头像 URL 有效性
+              if (url &&
+                !/default|placeholder|logo|icon|banner/i.test(url) &&
+                (url.includes('avatar') || url.includes('user') || url.includes('head') || /\.(jpg|jpeg|png|gif|webp)/i.test(url))) {
+                const normalized = normalizeUrl(url);
+                if (normalized) {
+                  avatar = normalized;
+                  logger.info('segmentfault', '从用户主页提取到头像', { avatar: avatar.substring(0, 80) });
+                  break;
+                }
+              }
             }
           }
         }
@@ -2415,16 +2453,20 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
 
     // 5. 检查是否有登录按钮（未登录标识）
     // 注意：settings 页面可能包含“登录密码/登录设备”等文案，不能用 `html.includes('登录')` 这种粗粒度判断
-    const hasLoginButton =
+    const hasLoginButtonRaw =
       /href=["'](?:https?:\/\/segmentfault\.com)?\/user\/login["']/i.test(headerHtml) ||
       /href=["'][^"']*\/user\/login[^"']*["']/i.test(headerHtml) ||
       /<form[^>]+action=["'][^"']*\/user\/login[^"']*["']/i.test(html);
     const hasLogoutButton =
       /\/user\/logout/i.test(headerHtml) ||
       /logout|signout|退出/i.test(headerHtml);
+    const hasStrongUserMenuMarker =
+      hasUserMenuMarker || hasLogoutButton || /\/user\/settings/i.test(headerHtml) || /\/user\/logout/i.test(headerHtml);
+    // 思否页面可能同时包含登录入口 DOM（用于未登录渲染/埋点），但只要出现“用户菜单”强标识，就应忽略登录入口的干扰
+    const hasLoginButton = hasStrongUserMenuMarker && userId ? false : hasLoginButtonRaw;
 
-    // settings 页：只要能取到当前用户 slug，且没有出现登录入口，就可推断已登录
-    if (sourceLabel === 'settings' && userId && !hasLoginButton) {
+    // settings 页：只要能取到当前用户 slug 且出现用户菜单标识，即可推断已登录
+    if (sourceLabel === 'settings' && userId && hasStrongUserMenuMarker) {
       logger.info('segmentfault', '从 settings 页面推断已登录', { userId, nickname, avatar: !!avatar });
       return {
         loggedIn: true,
@@ -2535,7 +2577,7 @@ const oschinaApi: PlatformApiConfig = {
     // 1. 优先使用用户主页 API（最可靠，返回结构化数据）
     // 2. 其次使用 Cookie 中的用户 ID 访问用户主页
     // 3. 最后从首页顶部导航栏提取（限定在 header/nav 区域）
-    
+
     // 检测结果收集
     let cookieResult: { hasValidCookie: boolean; userId?: string; noCookieAtAll?: boolean } = { hasValidCookie: false };
     let apiResult: { success: boolean; loggedIn?: boolean; userInfo?: any; error?: string } = { success: false };
@@ -2555,18 +2597,18 @@ const oschinaApi: PlatformApiConfig = {
       if (trimmed.startsWith('/')) return `${base}${trimmed}`;
       return trimmed;
     };
-    
+
     // 1. Cookie 检测 - 获取用户 ID
     try {
       const mainCookies = await chrome.cookies.getAll({ url: 'https://www.oschina.net/' });
       const myCookies = await chrome.cookies.getAll({ url: 'https://my.oschina.net/' });
       const allCookies = [...mainCookies, ...myCookies];
-      
+
       logger.info('oschina', '获取到的 Cookie', {
         count: allCookies.length,
         names: allCookies.map(c => c.name).slice(0, 25)
       });
-      
+
       const isValidValue = (value?: string) => {
         if (!value) return false;
         const trimmed = value.trim();
@@ -2574,18 +2616,18 @@ const oschinaApi: PlatformApiConfig = {
         const lower = trimmed.toLowerCase();
         return lower !== 'deleted' && lower !== 'null' && lower !== 'undefined' && trimmed.length > 0;
       };
-      
+
       // 开源中国的关键登录态 Cookie
       const oscidCookie = allCookies.find(c => c.name === 'oscid' && isValidValue(c.value));
       const userIdCookie = allCookies.find(c => (c.name === 'user_id' || c.name === '_user_id') && isValidValue(c.value));
-      
+
       cookieResult.noCookieAtAll = allCookies.length === 0;
-      
+
       if (oscidCookie || userIdCookie) {
         cookieResult.hasValidCookie = true;
         cookieResult.userId = userIdCookie?.value;
-        logger.info('oschina', '检测到有效的登录 Cookie', { 
-          hasOscid: !!oscidCookie, 
+        logger.info('oschina', '检测到有效的登录 Cookie', {
+          hasOscid: !!oscidCookie,
           userId: cookieResult.userId
         });
       } else {
@@ -2594,7 +2636,7 @@ const oschinaApi: PlatformApiConfig = {
     } catch (e: any) {
       logger.warn('oschina', 'Cookie 检测失败', { error: e.message });
     }
-    
+
     // 2. API 检测 - 尝试获取用户信息
     const pickNickname = (...values: unknown[]): string | undefined => {
       for (const value of values) {
@@ -2674,7 +2716,7 @@ const oschinaApi: PlatformApiConfig = {
     if (!apiResult.success && apiLoggedOut) {
       apiResult = { success: true, loggedIn: false, error: apiLoggedOut };
     }
-    
+
     // 3. 如有用户 ID，优先从用户主页补全昵称/头像（用户专属区域，避免误抓）
     let profileUserId = cookieResult.userId || apiResult.userInfo?.userId;
     let profileFromHome: { userId?: string; nickname?: string; avatar?: string } | null = null;
@@ -2786,7 +2828,7 @@ const oschinaApi: PlatformApiConfig = {
             'Referer': 'https://www.oschina.net/',
           },
         });
-        
+
         if (userPageRes.ok) {
           const userPageHtml = await userPageRes.text();
           logger.info('oschina', '用户主页获取成功', { length: userPageHtml.length });
@@ -2801,7 +2843,7 @@ const oschinaApi: PlatformApiConfig = {
             }
             return userPageHtml.substring(0, 60000);
           })();
-          
+
           // 从用户主页提取信息（这里的信息是用户专属的，不会误抓）
           let nickname: string | undefined;
           let avatar: string | undefined;
@@ -2912,17 +2954,17 @@ const oschinaApi: PlatformApiConfig = {
               const normalized = normalizeUrl(rawUrl, 'https://my.oschina.net') || normalizeUrl(rawUrl);
               // 放宽验证条件：只要是有效的 URL 且不是明显的 logo/icon
               if (normalized &&
-                  !normalized.includes('logo') && !normalized.includes('icon') &&
-                  !normalized.includes('favicon') && !normalized.includes('sprite') &&
-                  !normalized.includes('loading') && !normalized.includes('placeholder') &&
-                  !normalized.includes('default')) {
+                !normalized.includes('logo') && !normalized.includes('icon') &&
+                !normalized.includes('favicon') && !normalized.includes('sprite') &&
+                !normalized.includes('loading') && !normalized.includes('placeholder') &&
+                !normalized.includes('default')) {
                 avatar = normalized;
                 logger.info('oschina', '从用户主页提取到头像', { avatar });
                 break;
               }
             }
           }
-          
+
           if (nickname || avatar) {
             logger.info('oschina', '从用户主页提取到信息', { nickname, avatar: avatar ? '有' : '无' });
             const existingUserInfo = apiResult.userInfo;
@@ -2957,7 +2999,7 @@ const oschinaApi: PlatformApiConfig = {
         };
       }
     }
-    
+
     // 4. HTML 首页检测 - 仅用于判断登录状态，不提取用户信息
     try {
       const htmlRes = await fetchWithCookies('https://www.oschina.net/', {
@@ -2966,29 +3008,29 @@ const oschinaApi: PlatformApiConfig = {
           'Referer': 'https://www.oschina.net/',
         },
       });
-      
+
       if (htmlRes.ok) {
         const html = await htmlRes.text();
         logger.info('oschina', 'HTML 页面获取成功', { length: html.length });
-        
+
         // 只提取页面头部区域（前 20000 字符，通常包含导航栏）
         const headerHtml = html.substring(0, 20000);
-        
+
         // 检查登录/退出按钮（限定在导航区域）
         const loginPatterns = [
           'href="/home/login"',
           'class="login-btn"',
           'href="https://www.oschina.net/home/login"',
         ];
-        
+
         const logoutPatterns = [
           'href="/action/user/logout"',
           'action/user/logout',
         ];
-        
+
         const hasLoginBtn = loginPatterns.some(p => headerHtml.includes(p));
         const hasLogoutBtn = logoutPatterns.some(p => headerHtml.includes(p));
-        
+
         // 从导航栏提取用户 ID（如果还没有）
         let htmlUserId: string | undefined;
         if (!cookieResult.userId) {
@@ -2998,12 +3040,12 @@ const oschinaApi: PlatformApiConfig = {
             htmlUserId = userIdMatch[1];
           }
         }
-        
+
         // 检查是否有用户下拉菜单（已登录标志）
-        const hasUserDropdown = headerHtml.includes('user-dropdown') || 
-                               headerHtml.includes('user-menu') ||
-                               headerHtml.includes('current-user');
-        
+        const hasUserDropdown = headerHtml.includes('user-dropdown') ||
+          headerHtml.includes('user-menu') ||
+          headerHtml.includes('current-user');
+
         htmlResult = {
           success: true,
           hasLoginBtn,
@@ -3011,10 +3053,10 @@ const oschinaApi: PlatformApiConfig = {
           loggedIn: hasLogoutBtn || hasUserDropdown,
           userInfo: htmlUserId ? { userId: htmlUserId } : undefined
         };
-        
-        logger.info('oschina', 'HTML 解析结果', { 
-          hasLoginBtn, 
-          hasLogoutBtn, 
+
+        logger.info('oschina', 'HTML 解析结果', {
+          hasLoginBtn,
+          hasLogoutBtn,
           hasUserDropdown,
           htmlUserId,
           loggedIn: htmlResult.loggedIn
@@ -3023,14 +3065,14 @@ const oschinaApi: PlatformApiConfig = {
     } catch (e: any) {
       logger.warn('oschina', 'HTML 页面获取失败', { error: e.message });
     }
-    
+
     // 5. 综合判断登录状态
     logger.info('oschina', '综合检测结果', {
       cookie: { hasValid: cookieResult.hasValidCookie, userId: cookieResult.userId, noCookieAtAll: cookieResult.noCookieAtAll },
       api: { success: apiResult.success, loggedIn: apiResult.loggedIn, hasUserInfo: !!apiResult.userInfo },
       html: { success: htmlResult.success, loggedIn: htmlResult.loggedIn, hasLoginBtn: htmlResult.hasLoginBtn, hasLogoutBtn: htmlResult.hasLogoutBtn }
     });
-    
+
     // 情况1: API 或用户主页返回了用户信息
     if (apiResult.success && apiResult.loggedIn && apiResult.userInfo) {
       const userInfo = apiResult.userInfo;
@@ -3046,7 +3088,7 @@ const oschinaApi: PlatformApiConfig = {
         detectionMethod: 'api',
       };
     }
-    
+
     // 情况2: HTML 检测成功且明确显示未登录（有登录按钮，无退出按钮）
     if (htmlResult.success && htmlResult.hasLoginBtn && !htmlResult.hasLogoutBtn) {
       logger.info('oschina', 'HTML 检测确认未登录');
@@ -3058,7 +3100,7 @@ const oschinaApi: PlatformApiConfig = {
         retryable: false,
       };
     }
-    
+
     // 情况3: API 明确返回未登录
     if (apiResult.success && apiResult.loggedIn === false) {
       logger.info('oschina', 'API 检测确认未登录');
@@ -3070,7 +3112,7 @@ const oschinaApi: PlatformApiConfig = {
         retryable: false,
       };
     }
-    
+
     // 情况4: HTML 检测确认已登录（有退出按钮或用户下拉菜单）
     if (htmlResult.success && htmlResult.loggedIn) {
       return {
@@ -3083,7 +3125,7 @@ const oschinaApi: PlatformApiConfig = {
         detectionMethod: 'html',
       };
     }
-    
+
     // 情况5: Cookie 有效但 API/HTML 都无法确认
     if (cookieResult.hasValidCookie) {
       logger.info('oschina', 'Cookie 有效，判定为已登录');
@@ -3095,7 +3137,7 @@ const oschinaApi: PlatformApiConfig = {
         detectionMethod: 'cookie',
       };
     }
-    
+
     // 情况6: 完全没有 Cookie 且 HTML 检测成功但无登录标志，判定为未登录
     if (cookieResult.noCookieAtAll && htmlResult.success) {
       logger.info('oschina', '无 Cookie 且 HTML 无登录标志，判定为未登录');
@@ -3107,7 +3149,7 @@ const oschinaApi: PlatformApiConfig = {
         retryable: false,
       };
     }
-    
+
     // 情况7: 所有检测都失败或不确定，标记为可重试
     logger.info('oschina', '所有检测方式都未能确认登录状态，标记为可重试');
     return {
@@ -3128,12 +3170,12 @@ const wechatApi: PlatformApiConfig = {
     try {
       // 1. 检查关键 Cookie 是否存在（使用 URL 方式获取更完整的 Cookie）
       const wechatCookies = await chrome.cookies.getAll({ url: 'https://mp.weixin.qq.com/' });
-      
-      logger.info('wechat', '获取到的 Cookie', { 
+
+      logger.info('wechat', '获取到的 Cookie', {
         count: wechatCookies.length,
         names: wechatCookies.map(c => c.name).slice(0, 15)
       });
-      
+
       // 微信公众号的关键 Cookie
       // slave_sid / slave_user / data_ticket / bizuin 等都可能表示登录状态
       const sessionCookieNames = ['slave_sid', 'slave_user', 'data_ticket', 'bizuin', 'data_bizuin', 'cert'];
@@ -3148,18 +3190,18 @@ const wechatApi: PlatformApiConfig = {
       const hasValidSession = wechatCookies.some(
         (c) => sessionCookieNameSet.has(c.name.toLowerCase()) && isValidValue(c.value) && c.value.length > 5
       );
-      
+
       if (!hasValidSession) {
         logger.info('wechat', '未找到有效的登录 Cookie');
-        return { 
-          loggedIn: false, 
-          platform: 'wechat', 
+        return {
+          loggedIn: false,
+          platform: 'wechat',
           errorType: AuthErrorType.LOGGED_OUT,
           error: '登录已过期',
           retryable: false
         };
       }
-      
+
       // 2. 有 Cookie 就认为已登录（微信的 API 验证不可靠，经常返回重定向）
       // 因为微信公众号的 Cookie 有效期较长，且只有登录后才会设置这些 Cookie
       logger.info('wechat', '检测到有效的登录 Cookie，判定为已登录');
@@ -3183,12 +3225,12 @@ const wechatApi: PlatformApiConfig = {
         try {
           const BufferLike = (globalThis as any).Buffer;
           if (BufferLike) return BufferLike.from(normalized, 'base64').toString('utf8');
-        } catch {}
+        } catch { }
         try {
           if (typeof atob === 'function') {
             return atob(normalized);
           }
-        } catch {}
+        } catch { }
         return null;
       };
 
@@ -3229,9 +3271,9 @@ const wechatApi: PlatformApiConfig = {
       };
     } catch (e: any) {
       logger.error('wechat', 'Cookie 检测失败', e);
-      return { 
-        loggedIn: false, 
-        platform: 'wechat', 
+      return {
+        loggedIn: false,
+        platform: 'wechat',
         errorType: AuthErrorType.NETWORK_ERROR,
         error: e.message,
         retryable: true
@@ -3272,16 +3314,16 @@ export async function fetchPlatformUserInfo(platform: string): Promise<UserInfo>
   if (!api) {
     return { loggedIn: false, platform, error: '不支持的平台' };
   }
-  
+
   logger.info('fetch', `获取 ${api.name} 用户信息...`);
-  
+
   // 使用带 Cookie 回退的检测方式
   const result = await fetchUserInfoWithFallback(platform, () => api.fetchUserInfo());
-  
-  logger.info('fetch', `${api.name} 结果:`, { 
-    loggedIn: result.loggedIn, 
+
+  logger.info('fetch', `${api.name} 结果:`, {
+    loggedIn: result.loggedIn,
     nickname: result.nickname,
-    detectionMethod: result.detectionMethod 
+    detectionMethod: result.detectionMethod
   });
   return result;
 }
@@ -3291,19 +3333,19 @@ export async function fetchPlatformUserInfo(platform: string): Promise<UserInfo>
  */
 export async function fetchMultiplePlatformUserInfo(platforms: string[]): Promise<Map<string, UserInfo>> {
   logger.info('batch-fetch', `批量获取 ${platforms.length} 个平台的用户信息`);
-  
+
   const results = await Promise.all(
     platforms.map(async (platform) => {
       const info = await fetchPlatformUserInfo(platform);
       return { platform, info };
     })
   );
-  
+
   const resultMap = new Map<string, UserInfo>();
   for (const { platform, info } of results) {
     resultMap.set(platform, info);
   }
-  
+
   return resultMap;
 }
 

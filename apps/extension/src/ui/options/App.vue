@@ -4,7 +4,7 @@
       <!-- 内部组件用于获取 message API -->
       <MessageApiInjector />
       <div 
-        class="min-h-screen relative transition-colors duration-300"
+        class="min-h-screen relative transition-colors duration-300 overflow-x-hidden"
         :class="isDark 
           ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-slate-900' 
           : 'bg-gradient-to-br from-blue-50 via-white to-purple-50'"
@@ -26,31 +26,32 @@
             ? 'bg-gray-900/80 border-b border-gray-700/50' 
             : 'bg-white/80 border-b border-gray-200/50'"
         >
-          <div class="max-w-7xl mx-auto px-3 py-1.5">
+          <div class="w-full pl-4 pr-4 py-2">
             <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 select-none">
-                <div class="w-7 h-7 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center shadow-md">
-                  <span class="text-white text-sm">✨</span>
+              <!-- 左侧 Logo 区域 - 靠左对齐 -->
+              <div class="flex items-center gap-3 select-none">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                  <span class="text-white text-xl">✨</span>
                 </div>
                 <div>
-                  <h1 class="text-lg font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent leading-tight">SyncCaster</h1>
-                  <p class="text-[9px] leading-tight" :class="isDark ? 'text-gray-400' : 'text-gray-500'">v2.0.0 · 内容采集与发布助手</p>
+                  <h1 class="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent leading-tight tracking-wide">SyncCaster</h1>
+                  <p class="text-[10px] leading-tight mt-0.5" :class="isDark ? 'text-gray-400' : 'text-gray-500'">v2.0.0 · 内容采集与发布助手</p>
                 </div>
               </div>
               
-              <!-- 功能区：导入/导出 + 帮助 + 主题切换 -->
-              <div class="flex items-center gap-2">
+              <!-- 右侧功能区 - 靠右对齐 -->
+              <div class="flex items-center gap-2 flex-shrink-0 mr-2">
                 <!-- 导入按钮 -->
                 <button
                   @click="handleImport"
-                  class="h-8 px-3 rounded-md transition-colors flex items-center gap-1.5 text-sm font-medium select-none border-none outline-none"
+                  class="h-8 px-2 sm:px-3 rounded-md transition-colors flex items-center gap-1.5 text-sm font-medium select-none border-none outline-none"
                   :class="isDark 
                     ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' 
                     : 'bg-gray-100 hover:bg-gray-200 text-gray-700'"
                   title="导入 Markdown 文件"
                 >
                   <span>📥</span>
-                  <span>导入</span>
+                  <span class="hidden sm:inline">导入</span>
                 </button>
                 
                 <!-- 导出下拉菜单 -->
@@ -61,14 +62,14 @@
                   placement="bottom-end"
                 >
                   <button
-                    class="h-8 px-3 rounded-md transition-colors flex items-center gap-1.5 text-sm font-medium select-none border-none outline-none"
+                    class="h-8 px-2 sm:px-3 rounded-md transition-colors flex items-center gap-1.5 text-sm font-medium select-none border-none outline-none"
                     :class="isDark 
                       ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' 
                       : 'bg-gray-100 hover:bg-gray-200 text-gray-700'"
                     title="导出内容"
                   >
                     <span>📤</span>
-                    <span>导出</span>
+                    <span class="hidden sm:inline">导出</span>
                     <span class="text-[10px]">▼</span>
                   </button>
                 </n-dropdown>
@@ -81,14 +82,14 @@
                   placement="bottom-end"
                 >
                   <button
-                    class="h-8 px-3 rounded-md transition-colors flex items-center gap-1.5 text-sm font-medium select-none border-none outline-none"
+                    class="h-8 px-2 sm:px-3 rounded-md transition-colors flex items-center gap-1.5 text-sm font-medium select-none border-none outline-none"
                     :class="isDark 
                       ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' 
                       : 'bg-gray-100 hover:bg-gray-200 text-gray-700'"
                     title="帮助"
                   >
                     <span>❓</span>
-                    <span>帮助</span>
+                    <span class="hidden sm:inline">帮助</span>
                     <span class="text-[10px]">▼</span>
                   </button>
                 </n-dropdown>
