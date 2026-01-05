@@ -3533,15 +3533,16 @@ const oschinaApi: PlatformApiConfig = {
       apiResult = { success: true, loggedIn: false, error: apiLoggedOut };
     }
 
+    // 登录证据：有效的 Cookie 或 API 确认登录
+    const hasLoginEvidence = cookieResult.hasValidCookie || (apiResult.success && apiResult.loggedIn);
+
     // 3. 如有用户 ID，优先从用户主页补全昵称/头像（用户专属区域，避免误抓）
-    // 重要：只有在 Cookie 检测到登录态或 API 确认登录时，才尝试从首页提取信息
-    // 否则可能会错误地提取到官方推荐用户的信息
     let profileUserId = cookieResult.userId || apiResult.userInfo?.userId;
     let profileFromHome: { userId?: string; nickname?: string; avatar?: string } | null = null;
 
-    const hasLoginEvidence = cookieResult.hasValidCookie || (apiResult.success && apiResult.loggedIn);
+    // 尝试从个人空间首页提取用户信息（不需要登录证据，因为 Cookie 检测可能失败）
     const shouldTryHome =
-      hasLoginEvidence && (!profileUserId || (apiResult.userInfo && (!apiResult.userInfo.nickname || !apiResult.userInfo.avatar)));
+      !profileUserId || (apiResult.userInfo && (!apiResult.userInfo.nickname || !apiResult.userInfo.avatar));
 
     if (shouldTryHome) {
       try {
@@ -3631,9 +3632,8 @@ const oschinaApi: PlatformApiConfig = {
         logger.warn('oschina', '个人空间首页解析失败', { error: e?.message || String(e) });
       }
     }
-    // 只有在有登录证据的情况下，才尝试从用户主页补全信息
+    // 尝试从用户主页补全信息（不需要登录证据，因为 Cookie 检测可能失败）
     const shouldFetchProfilePage =
-      hasLoginEvidence &&
       !!profileUserId &&
       (!apiResult.userInfo ||
         !apiResult.userInfo.nickname ||
@@ -3654,15 +3654,27 @@ const oschinaApi: PlatformApiConfig = {
           const userPageHtml = await userPageRes.text();
           logger.info('oschina', '用户主页获取成功', { length: userPageHtml.length });
 
+          // 扩大搜索范围，包含更多可能的用户信息区域
           const scopeHtml = (() => {
             const lower = userPageHtml.toLowerCase();
-            const markers = ['sidebar-section user-info', 'space-sidebar', 'user-text', 'avatar-wrap'];
+            // 开源中国用户主页的用户信息可能在多个区域
+            const markers = [
+              'sidebar-section user-info',
+              'space-sidebar',
+              'user-text',
+              'avatar-wrap',
+              'user-info-section',
+              'user-profile',
+              'profile-header',
+              'user-header',
+            ];
             for (const marker of markers) {
               const idx = lower.indexOf(marker);
               if (idx < 0) continue;
-              return userPageHtml.substring(Math.max(0, idx - 6000), Math.min(userPageHtml.length, idx + 16000));
+              return userPageHtml.substring(Math.max(0, idx - 8000), Math.min(userPageHtml.length, idx + 20000));
             }
-            return userPageHtml.substring(0, 60000);
+            // 如果没有找到特定标记，返回更大范围的内容
+            return userPageHtml.substring(0, 80000);
           })();
 
           // 从用户主页提取信息（这里的信息是用户专属的，不会误抓）
@@ -3703,6 +3715,9 @@ const oschinaApi: PlatformApiConfig = {
             // 用户昵称/账号名（开源中国自动生成的用户名格式为 osc_XXXXXXXX）
             /<span[^>]*class="[^"]*(?:nickname|account|name)[^"]*"[^>]*>([^<]+)<\/span>/i,
             /<div[^>]*class="[^"]*(?:nickname|account|name)[^"]*"[^>]*>([^<]+)<\/div>/i,
+            // 新增：更宽松的用户名匹配
+            /<span[^>]*class="name"[^>]*>([^<]+)<\/span>/i,
+            /<div[^>]*class="name"[^>]*>([^<]+)<\/div>/i,
           ];
 
           for (const pattern of userNamePatterns) {
@@ -3731,9 +3746,10 @@ const oschinaApi: PlatformApiConfig = {
                 .replace(/\s*的博客.*$/i, '')
                 .replace(/\s*-\s*OSCHINA.*$/i, '')
                 .replace(/\s*\|.*$/i, '')
+                .replace(/\s*-\s*中文开源技术交流社区.*$/i, '')
                 .trim();
               // 支持 osc_ 开头的用户名
-              if (cleanTitle && cleanTitle.length > 0 && cleanTitle.length < 50 && !/^\d+$/.test(cleanTitle)) {
+              if (cleanTitle && cleanTitle.length > 0 && cleanTitle.length < 50 && !/^\d+$/.test(cleanTitle) && cleanTitle !== '个人空间') {
                 nickname = cleanTitle;
                 logger.info('oschina', '从 title 提取到昵称', { nickname });
               }
@@ -3766,6 +3782,9 @@ const oschinaApi: PlatformApiConfig = {
             /<img[^>]+src=["']([^"']+avatar[^"']+)["']/i,
             // 任何包含 portrait 的图片
             /<img[^>]+src=["']([^"']+portrait[^"']+)["']/i,
+            // 新增：更宽松的头像匹配
+            /<img[^>]+class="avatar"[^>]+src=["']([^"']+)["']/i,
+            /<img[^>]+src=["']([^"']+)["'][^>]+class="avatar"/i,
           ];
 
           for (const pattern of avatarPatterns) {
