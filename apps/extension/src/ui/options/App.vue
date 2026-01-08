@@ -291,10 +291,58 @@ const components: Record<string, any> = {
 
 const currentComponent = shallowRef(DashboardView);
 
-onMounted(() => {
+onMounted(async () => {
   updateRouteFromHash();
   window.addEventListener('hashchange', updateRouteFromHash);
+
+  // 插件打开时自动检测账号状态（后台执行，不阻塞 UI）
+  autoRefreshAccountsOnStartup();
 });
+
+// 启动时自动刷新账号状态
+const ACCOUNTS_AUTO_REFRESH_THROTTLE_MS = 5 * 1000;
+const ACCOUNTS_AUTO_REFRESH_STORAGE_KEY = 'lastAccountsAutoRefreshAt';
+
+async function autoRefreshAccountsOnStartup() {
+  try {
+    // 从数据库加载账号
+    const accounts = await db.accounts.toArray();
+    if (accounts.length === 0) return;
+
+    // 检查节流：避免短时间内重复刷新
+    const stored = await chrome.storage.local.get([ACCOUNTS_AUTO_REFRESH_STORAGE_KEY]);
+    const last = stored?.[ACCOUNTS_AUTO_REFRESH_STORAGE_KEY];
+    const lastAt = typeof last === 'number' ? last : 0;
+    const now = Date.now();
+
+    if (lastAt > 0 && now - lastAt < ACCOUNTS_AUTO_REFRESH_THROTTLE_MS) {
+      return;
+    }
+
+    // 写入节流时间戳
+    await chrome.storage.local.set({ [ACCOUNTS_AUTO_REFRESH_STORAGE_KEY]: now });
+
+    // 调用后台服务刷新所有账号
+    const result = await chrome.runtime.sendMessage({
+      type: 'REFRESH_ALL_ACCOUNTS_FAST',
+      data: { accounts },
+    });
+
+    if (result?.success) {
+      const { successCount, failedCount } = result;
+      // 显示美观的提示
+      if (failedCount === 0 && successCount > 0) {
+        showMessage('success', `已检测 ${successCount} 个账号，全部正常`);
+      } else if (successCount === 0 && failedCount > 0) {
+        showMessage('error', `${failedCount} 个账号登录已失效，请前往账号管理重新登录`);
+      } else if (failedCount > 0) {
+        showMessage('warning', `${successCount} 个账号正常，${failedCount} 个已失效`);
+      }
+    }
+  } catch (error) {
+    console.error('[App] 自动刷新账号失败:', error);
+  }
+}
 
 onBeforeUnmount(() => {
   window.removeEventListener('hashchange', updateRouteFromHash);

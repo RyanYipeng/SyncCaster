@@ -160,6 +160,30 @@ export const COOKIE_CONFIGS: Record<string, CookieDetectionConfig> = {
     url: 'https://mp.weixin.qq.com/',
     sessionCookies: ['slave_sid', 'slave_user', 'data_ticket', 'bizuin', 'data_bizuin', 'cert'],
   },
+  'toutiao': {
+    url: 'https://www.toutiao.com/',
+    fallbackUrls: ['https://sso.toutiao.com/', 'https://mp.toutiao.com/'],
+    sessionCookies: ['toutiao_sso_user', 'passport_csrf_token', 'sid_guard', 'uid_tt', 'sid_tt', 'sessionid'],
+  },
+  'infoq': {
+    url: 'https://www.infoq.cn/',
+    fallbackUrls: ['https://xie.infoq.cn/'],
+    sessionCookies: ['INFOQ_TOKEN', 'SERVERID', 'uid', 'token', 'INFOQ_USER_ID'],
+  },
+  'baijiahao': {
+    url: 'https://baijiahao.baidu.com/',
+    fallbackUrls: ['https://passport.baidu.com/', 'https://author.baidu.com/'],
+    sessionCookies: ['BDUSS', 'STOKEN', 'BAIDUID', 'BDUSS_BFESS', 'PSTM'],
+  },
+  'wangyihao': {
+    url: 'https://mp.163.com/',
+    fallbackUrls: ['https://www.163.com/', 'https://passport.163.com/'],
+    sessionCookies: ['P_INFO', 'NTES_SESS', 'S_INFO', 'NTES_PASSPORT', 'NTESwebSI'],
+  },
+  'medium': {
+    url: 'https://medium.com/',
+    sessionCookies: ['sid', 'uid', '_gid', 'nonce', 'sz'],
+  },
 };
 
 export interface UserInfo {
@@ -4165,6 +4189,208 @@ const wechatApi: PlatformApiConfig = {
   },
 };
 
+// 今日头条 - 使用 Cookie 检测
+const toutiaoApi: PlatformApiConfig = {
+  id: 'toutiao',
+  name: '今日头条',
+  async fetchUserInfo(): Promise<UserInfo> {
+    try {
+      // 尝试 API 获取用户信息
+      const res = await fetchWithCookies('https://www.toutiao.com/api/pc/user/info/', {
+        headers: {
+          'Accept': 'application/json',
+          'Referer': 'https://www.toutiao.com/',
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        logger.info('toutiao', 'API 响应', data);
+
+        if (data.data && data.data.user_id) {
+          const user = data.data;
+          return {
+            loggedIn: true,
+            platform: 'toutiao',
+            userId: String(user.user_id),
+            nickname: user.screen_name || user.name || '头条用户',
+            avatar: user.avatar_url || user.avatar,
+            detectionMethod: 'api',
+          };
+        }
+      }
+    } catch (e: any) {
+      logger.warn('toutiao', 'API 调用失败', { error: e.message });
+    }
+
+    // API 失败，使用 Cookie 检测
+    return detectViaCookies('toutiao');
+  },
+};
+
+// InfoQ - 使用 Cookie 检测
+const infoqApi: PlatformApiConfig = {
+  id: 'infoq',
+  name: 'InfoQ',
+  async fetchUserInfo(): Promise<UserInfo> {
+    try {
+      // 尝试 API 获取用户信息
+      const res = await fetchWithCookies('https://www.infoq.cn/public/v1/user/info', {
+        headers: {
+          'Accept': 'application/json',
+          'Referer': 'https://www.infoq.cn/',
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        logger.info('infoq', 'API 响应', data);
+
+        const user = data.data || data;
+        if (user && (user.uid || user.id || user.userId)) {
+          return {
+            loggedIn: true,
+            platform: 'infoq',
+            userId: String(user.uid || user.id || user.userId),
+            nickname: user.nickname || user.name || user.userName || 'InfoQ用户',
+            avatar: user.avatar || user.avatarUrl,
+            detectionMethod: 'api',
+          };
+        }
+      }
+    } catch (e: any) {
+      logger.warn('infoq', 'API 调用失败', { error: e.message });
+    }
+
+    // API 失败，使用 Cookie 检测
+    return detectViaCookies('infoq');
+  },
+};
+
+// 百家号 - 使用 Cookie 检测（百度账号体系）
+const baijiahaoApi: PlatformApiConfig = {
+  id: 'baijiahao',
+  name: '百家号',
+  async fetchUserInfo(): Promise<UserInfo> {
+    try {
+      // 尝试从百家号后台 API 获取用户信息
+      const res = await fetchWithCookies('https://baijiahao.baidu.com/pcui/author/query', {
+        headers: {
+          'Accept': 'application/json',
+          'Referer': 'https://baijiahao.baidu.com/',
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        logger.info('baijiahao', 'API 响应', data);
+
+        if (data.errno === 0 && data.data) {
+          const user = data.data;
+          return {
+            loggedIn: true,
+            platform: 'baijiahao',
+            userId: String(user.app_id || user.author_id || user.id),
+            nickname: user.name || user.author_name || '百家号用户',
+            avatar: user.avatar || user.head_img,
+            detectionMethod: 'api',
+          };
+        }
+      }
+    } catch (e: any) {
+      logger.warn('baijiahao', 'API 调用失败', { error: e.message });
+    }
+
+    // API 失败，使用 Cookie 检测
+    return detectViaCookies('baijiahao');
+  },
+};
+
+// 网易号 - 使用 Cookie 检测
+const wangyihaoApi: PlatformApiConfig = {
+  id: 'wangyihao',
+  name: '网易号',
+  async fetchUserInfo(): Promise<UserInfo> {
+    try {
+      // 尝试从网易号后台 API 获取用户信息
+      const res = await fetchWithCookies('https://mp.163.com/api/user/info', {
+        headers: {
+          'Accept': 'application/json',
+          'Referer': 'https://mp.163.com/',
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        logger.info('wangyihao', 'API 响应', data);
+
+        if (data.code === 200 && data.data) {
+          const user = data.data;
+          return {
+            loggedIn: true,
+            platform: 'wangyihao',
+            userId: String(user.userId || user.id || user.uid),
+            nickname: user.nickname || user.name || '网易号用户',
+            avatar: user.avatar || user.headImgUrl,
+            detectionMethod: 'api',
+          };
+        }
+      }
+    } catch (e: any) {
+      logger.warn('wangyihao', 'API 调用失败', { error: e.message });
+    }
+
+    // API 失败，使用 Cookie 检测
+    return detectViaCookies('wangyihao');
+  },
+};
+
+// Medium - 使用 Cookie 检测
+const mediumApi: PlatformApiConfig = {
+  id: 'medium',
+  name: 'Medium',
+  async fetchUserInfo(): Promise<UserInfo> {
+    try {
+      // 尝试从 Medium API 获取用户信息
+      const res = await fetchWithCookies('https://medium.com/_/api/users/me', {
+        headers: {
+          'Accept': 'application/json',
+          'Referer': 'https://medium.com/',
+        },
+      });
+
+      if (res.ok) {
+        const text = await res.text();
+        // Medium API 返回的 JSON 前面有 ])}while(1);</x> 前缀
+        const jsonStr = text.replace(/^\]\)\}while\(1\);<\/x>/, '');
+        try {
+          const data = JSON.parse(jsonStr);
+          logger.info('medium', 'API 响应', data);
+
+          if (data.payload && data.payload.user) {
+            const user = data.payload.user;
+            return {
+              loggedIn: true,
+              platform: 'medium',
+              userId: user.username || user.userId,
+              nickname: user.name || user.username || 'Medium用户',
+              avatar: user.imageId ? `https://miro.medium.com/v2/resize:fill:176:176/${user.imageId}` : undefined,
+              detectionMethod: 'api',
+            };
+          }
+        } catch (parseErr) {
+          logger.warn('medium', 'API 响应解析失败', { error: (parseErr as Error).message });
+        }
+      }
+    } catch (e: any) {
+      logger.warn('medium', 'API 调用失败', { error: e.message });
+    }
+
+    // API 失败，使用 Cookie 检测
+    return detectViaCookies('medium');
+  },
+};
+
 // ============================================================
 // API 注册表和导出函数
 // ============================================================
@@ -4182,6 +4408,11 @@ const platformApis: Record<string, PlatformApiConfig> = {
   segmentfault: segmentfaultApi,
   oschina: oschinaApi,
   wechat: wechatApi,
+  toutiao: toutiaoApi,
+  infoq: infoqApi,
+  baijiahao: baijiahaoApi,
+  wangyihao: wangyihaoApi,
+  medium: mediumApi,
 };
 
 /**

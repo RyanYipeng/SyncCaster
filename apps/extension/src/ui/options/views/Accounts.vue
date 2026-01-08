@@ -122,6 +122,8 @@ import { useMessage } from 'naive-ui';
 
 const ACCOUNTS_AUTO_REFRESH_THROTTLE_MS = 5 * 1000;
 const ACCOUNTS_AUTO_REFRESH_STORAGE_KEY = 'lastAccountsAutoRefreshAt';
+const AUTO_DETECT_UNBOUND_THROTTLE_MS = 30 * 1000;
+const AUTO_DETECT_UNBOUND_STORAGE_KEY = 'lastAutoDetectUnboundAt';
 
 defineProps<{ isDark?: boolean }>();
 const message = useMessage();
@@ -143,6 +145,11 @@ const platforms = [
   { id: 'segmentfault', name: '思否' },
   { id: 'bilibili', name: 'B站专栏' },
   { id: 'oschina', name: '开源中国' },
+  { id: 'toutiao', name: '今日头条' },
+  { id: 'infoq', name: 'InfoQ' },
+  { id: 'baijiahao', name: '百家号' },
+  { id: 'wangyihao', name: '网易号' },
+  { id: 'medium', name: 'Medium' },
 ] as const;
 
 const unboundPlatforms = computed(() => {
@@ -188,12 +195,18 @@ const platformUserUrls: Record<string, (userId?: string) => string> = {
   'segmentfault': (userId) => userId ? `https://segmentfault.com/u/${userId}` : 'https://segmentfault.com/user/settings',
   'bilibili': (userId) => userId ? `https://space.bilibili.com/${userId}` : 'https://member.bilibili.com/platform/home',
   'oschina': (userId) => userId ? `https://my.oschina.net/u/${userId}` : 'https://my.oschina.net/',
+  'toutiao': (userId) => userId ? `https://www.toutiao.com/c/user/token/${userId}/` : 'https://mp.toutiao.com/',
+  'infoq': (userId) => userId ? `https://www.infoq.cn/u/${userId}/` : 'https://www.infoq.cn/profile/',
+  'baijiahao': (userId) => userId ? `https://author.baidu.com/home/${userId}` : 'https://baijiahao.baidu.com/',
+  'wangyihao': (userId) => userId ? `https://www.163.com/dy/media/${userId}.html` : 'https://mp.163.com/',
+  'medium': (userId) => userId ? `https://medium.com/@${userId}` : 'https://medium.com/me/stories/drafts',
 };
 
 onMounted(async () => {
   await loadAccounts();
   await quickStatusCheckOnStartup();
   await autoRefreshAccountsOnEnter();
+  await autoDetectAndBindUnboundPlatforms();
 });
 
 async function autoRefreshAccountsOnEnter() {
@@ -225,6 +238,66 @@ async function autoRefreshAccountsOnEnter() {
     await loadAccounts();
   } catch (error) {
     console.error('Auto refresh accounts failed:', error);
+  }
+}
+
+async function autoDetectAndBindUnboundPlatforms() {
+  try {
+    // 节流检查
+    const stored = await chrome.storage.local.get([AUTO_DETECT_UNBOUND_STORAGE_KEY]);
+    const last = stored?.[AUTO_DETECT_UNBOUND_STORAGE_KEY];
+    const lastAt = typeof last === 'number' ? last : 0;
+    const now = Date.now();
+
+    if (lastAt > 0 && now - lastAt < AUTO_DETECT_UNBOUND_THROTTLE_MS) {
+      return;
+    }
+
+    // 获取未绑定平台列表
+    const unbound = unboundPlatforms.value;
+    if (unbound.length === 0) return;
+
+    // 写入节流时间戳
+    await chrome.storage.local.set({ [AUTO_DETECT_UNBOUND_STORAGE_KEY]: now });
+
+    // 并行检测所有未绑定平台的登录状态
+    const results = await Promise.all(
+      unbound.map(async (platform) => {
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'FETCH_PLATFORM_USER_INFO',
+            data: { platform: platform.id },
+          });
+          return { platform: platform.id, name: platform.name, result };
+        } catch (e) {
+          return { platform: platform.id, name: platform.name, result: { success: false } };
+        }
+      })
+    );
+
+    // 对已登录的平台自动绑定
+    const boundPlatforms: string[] = [];
+    for (const { platform, name, result } of results) {
+      if (result.success && result.info?.loggedIn) {
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'QUICK_ADD_ACCOUNT',
+            data: { platform },
+          });
+          boundPlatforms.push(name);
+        } catch (e) {
+          console.error(`Auto bind ${platform} failed:`, e);
+        }
+      }
+    }
+
+    // 如果有自动绑定的账号，显示提示并重新加载
+    if (boundPlatforms.length > 0) {
+      message.success(`已自动绑定 ${boundPlatforms.length} 个账号：${boundPlatforms.join('、')}`);
+      await loadAccounts();
+    }
+  } catch (error) {
+    console.error('Auto detect and bind unbound platforms failed:', error);
   }
 }
 
@@ -274,10 +347,8 @@ function getDefaultIconUrl(): string {
 }
 
 function getPlatformIconUrl(platform: string): string {
-  const pageUrl = platformUserUrls[platform]?.();
-  const target = pageUrl || 'https://www.' + platform + '.com/';
-  // Prefer remote favicon to avoid depending on chrome:// pages; this works in extension pages.
-  return `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(target)}&sz=32`;
+  // 使用本地图标，避免每次动态加载
+  return chrome.runtime.getURL(`assets/platforms/${platform}.png`);
 }
 
 function isAccountExpiringSoon(account: Account): boolean {
@@ -650,6 +721,15 @@ async function refreshAllAccounts() {
 
 .platform-icon-avatar {
   flex-shrink: 0;
+}
+
+.platform-icon-avatar :deep(.n-avatar) {
+  background-color: transparent;
+}
+
+/* 已绑定账号区域的平台图标也需要透明背景 */
+.account-left :deep(.n-avatar) {
+  background-color: transparent;
 }
 
 .platform-name {

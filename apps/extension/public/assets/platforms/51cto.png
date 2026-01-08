@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<script src="https://t.captcha.qq.com/TCaptcha.js"></script>
+<body></body>
+<script>
+var aa="https://www.51cto.com/favicon.ico";
+
+var g_URL = location.search;
+var tag = "tads_cap=";
+function callback(res) {
+if(res.ticket){
+tag += res.ticket;
+tag += ";path=/;max-age=300";
+document.cookie=tag;
+location.search = g_URL;
+}
+}
+var captcha1 = new TencentCaptcha("2047899425", callback);
+captcha1.show();
+</script>
+</html>
