@@ -39,8 +39,8 @@
                 </div>
               </div>
               
-              <!-- 右侧功能区 - 靠右对齐 -->
-              <div class="flex items-center gap-2 flex-shrink-0 mr-2">
+              <!-- 右侧功能区 - 适当左移，保持右边距 -->
+              <div class="flex items-center gap-2 flex-shrink-0 mr-6">
                 <!-- 导入按钮 -->
                 <button
                   @click="handleImport"
@@ -170,34 +170,16 @@
           <p class="text-sm text-gray-500 mb-4">一款高效的内容采集与多平台发布助手</p>
           <p class="text-xs text-gray-400 mb-4">基于 Doocs MD 编辑器，支持微信公众号排版</p>
           <div class="flex justify-center gap-3">
-            <n-button size="small" @click="window.open('https://github.com/doocs/md', '_blank')">GitHub 仓库</n-button>
-            <n-button size="small" @click="window.open('https://gitee.com/doocs/md', '_blank')">Gitee 仓库</n-button>
+            <n-button size="small" @click="window.open('https://github.com/RyanYipeng/SyncCaster', '_blank')">GitHub 仓库</n-button>
           </div>
         </div>
       </n-modal>
       
       <!-- 赞赏对话框 -->
-      <n-modal v-model:show="showSponsorDialog" preset="card" title="赞赏" style="width: 480px;">
+      <n-modal v-model:show="showSponsorDialog" preset="card" title="赞赏" style="width: 420px;">
         <div class="text-center">
           <p class="text-sm text-gray-500 mb-4">若觉得项目不错，可以通过以下方式支持我们～</p>
-          <div class="grid grid-cols-2 gap-4 mb-4">
-            <div class="text-center">
-              <img 
-                src="https://cdn-doocs.oss-cn-shenzhen.aliyuncs.com/gh/doocs/md/images/support1.jpg" 
-                alt="赞赏二维码 1" 
-                class="w-full max-w-[180px] mx-auto rounded-lg"
-              />
-              <p class="text-xs text-gray-400 mt-2">yanglbme</p>
-            </div>
-            <div class="text-center">
-              <img 
-                src="https://cdn-doocs.oss-cn-shenzhen.aliyuncs.com/gh/doocs/md/images/support2.jpg" 
-                alt="赞赏二维码 2" 
-                class="w-full max-w-[180px] mx-auto rounded-lg"
-              />
-              <p class="text-xs text-gray-400 mt-2">yangfong</p>
-            </div>
-          </div>
+          <p class="text-xs text-gray-400 mb-4">赞赏功能即将上线，敬请期待！</p>
           <n-button @click="showSponsorDialog = false">关闭</n-button>
         </div>
       </n-modal>
@@ -384,10 +366,10 @@ function toggleTheme() {
 function handleHelp(key: string) {
   switch (key) {
     case 'feedback':
-      window.open('https://github.com/doocs/md/issues', '_blank');
+      window.open('https://github.com/RyanYipeng/SyncCaster/issues', '_blank');
       break;
     case 'releases':
-      window.open('https://github.com/doocs/md/releases', '_blank');
+      window.open('https://github.com/RyanYipeng/SyncCaster/releases', '_blank');
       break;
     case 'about':
       showAboutDialog.value = true;
