@@ -293,7 +293,9 @@ export async function publishToTarget(
                 message: `图片上传: ${progress.completed}/${progress.total}`,
                 meta: { progress },
               });
-            }
+            },
+            // 传递 reuseKey 和 targetUrl，确保图片上传回退时复用编辑页标签页
+            { reuseKey: domReuseKey, targetUrl: domTargetUrl, closeTab: false, active: false }
           );
 
           if (imageResult.urlMapping.size > 0) {
@@ -418,7 +420,9 @@ export async function publishToTarget(
                    message: `图片上传: ${progress.completed}/${progress.total}`,
                    meta: { progress },
                  });
-               }
+               },
+               // 传递 reuseKey 和 targetUrl，确保图片上传回退到站内执行时复用已打开的编辑页标签页
+               { reuseKey, targetUrl, closeTab: false, active: false }
              );
 
              if (imageResult.urlMapping.size > 0) {
@@ -885,15 +889,18 @@ const PLATFORM_URLS: Record<string, string> = {
   juejin: 'https://juejin.cn/',
   // 用于图片上传回退（站内执行）时打开的页面：指向创作中心编辑页，避免误打开首页导致用户困惑
   csdn: 'https://mp.csdn.net/mp_blog/creation/editor',
-  zhihu: 'https://www.zhihu.com/',
+  // 知乎：使用专栏写文章页面，避免打开首页
+  zhihu: 'https://zhuanlan.zhihu.com/write',
   wechat: 'https://mp.weixin.qq.com/',
   jianshu: 'https://www.jianshu.com/',
   cnblogs: 'https://www.cnblogs.com/',
-  '51cto': 'https://blog.51cto.com/',
+  // 51CTO：使用 Markdown 编辑器页面，避免打开首页
+  '51cto': 'https://blog.51cto.com/blogger/publish?&newBloger=2',
   'tencent-cloud': 'https://cloud.tencent.com/developer/',
   // 阿里云图片上传接口可能依赖页面环境（如 CSRF meta），使用新建文章页更稳妥
   aliyun: 'https://developer.aliyun.com/article/new#/',
-  segmentfault: 'https://segmentfault.com/',
+  // 思否：使用写文章页面，避免打开首页
+  segmentfault: 'https://segmentfault.com/write?freshman=1',
   // 避免先打开首页再跳转编辑页（用户可见跳转/延迟）；图片上传与发文都可在专栏编辑页完成
   bilibili: 'https://member.bilibili.com/platform/upload/text/edit',
   // 开源中国发文页面
