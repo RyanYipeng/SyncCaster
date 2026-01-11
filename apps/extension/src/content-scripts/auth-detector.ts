@@ -592,11 +592,25 @@ const wechatDetector: PlatformAuthDetector = {
       readTextFromEl(document.querySelector('[class*="account"][class*="nickname"]'));
     const getAvatarFromDom = () =>
       normalizeUrl(
-        readAvatarUrlFromEl(document.querySelector('img.weui-desktop-account__img')) ||
+        // 对齐 cose：优先匹配 class="avatar" 的 img 标签
+        readAvatarUrlFromEl(document.querySelector('img.avatar')) ||
+          readAvatarUrlFromEl(document.querySelector('img[class="avatar"]')) ||
+          readAvatarUrlFromEl(document.querySelector('img.weui-desktop-account__img')) ||
           readAvatarUrlFromEl(document.querySelector('.weui-desktop-account__avatar img')) ||
           readAvatarUrlFromEl(document.querySelector('#js_account_info img')) ||
           readAvatarUrlFromEl(document.querySelector('[class*="account"] img')) ||
-          readAvatarUrlFromEl(document.querySelector('[class*="avatar"] img'))
+          readAvatarUrlFromEl(document.querySelector('[class*="avatar"] img')) ||
+          // 匹配微信公众号头像 URL 模式
+          (() => {
+            const imgs = document.querySelectorAll('img[src*="mmbiz.qpic.cn"], img[src*="mmbiz.qlogo.cn"]');
+            for (const img of imgs) {
+              const src = (img as HTMLImageElement).src;
+              if (src && !src.includes('favicon') && !src.includes('sprite')) {
+                return src;
+              }
+            }
+            return undefined;
+          })()
       ) || undefined;
     
     // 检查 URL 中的 token 参数

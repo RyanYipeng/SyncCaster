@@ -168,8 +168,9 @@ export const COOKIE_CONFIGS: Record<string, CookieDetectionConfig> = {
   },
   'baijiahao': {
     url: 'https://baijiahao.baidu.com/',
-    fallbackUrls: ['https://passport.baidu.com/', 'https://author.baidu.com/'],
-    sessionCookies: ['BDUSS', 'STOKEN', 'BAIDUID', 'BDUSS_BFESS', 'PSTM'],
+    fallbackUrls: ['https://passport.baidu.com/', 'https://author.baidu.com/', 'https://www.baidu.com/'],
+    // BDUSS 是百度登录的核心 Cookie，设置在 .baidu.com 域名下
+    sessionCookies: ['BDUSS', 'BDUSS_BFESS'],
   },
   'wangyihao': {
     url: 'https://mp.163.com/',
@@ -3405,18 +3406,32 @@ async function fetchSegmentfaultUserProfile(userId: string): Promise<{ nickname?
 
     // 方法3: 从 HTML 中提取头像
     const avatarPatterns = [
-      /<img[^>]*class="[^"]*(?:avatar|user-avatar)[^"]*"[^>]*src="([^"]+)"/i,
-      /<img[^>]*src="([^"]+)"[^>]*class="[^"]*(?:avatar|user-avatar)[^"]*"/i,
-      /avatar[^"]*"[^>]*src="(https?:\/\/[^"]+(?:avatar|head)[^"]*)"/i,
+      // 思否用户主页头像通常在 card-body 或 userinfo 区域
+      /<div[^>]*class="[^"]*(?:card-body|userinfo|user-info)[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"/i,
+      /<img[^>]*class="[^"]*(?:avatar|user-avatar|rounded-circle)[^"]*"[^>]*src="([^"]+)"/i,
+      /<img[^>]*src="([^"]+)"[^>]*class="[^"]*(?:avatar|user-avatar|rounded-circle)[^"]*"/i,
+      // 思否 CDN 头像链接
+      /<img[^>]+src="(https?:\/\/[^"]*(?:cdn\.segmentfault|avatar)[^"]*)"/i,
+      // data-src 属性（懒加载）
+      /<img[^>]+data-src="([^"]+)"[^>]*class="[^"]*(?:avatar|user-avatar)[^"]*"/i,
+      // og:image meta 标签
+      /<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i,
+      // 任何带 avatar 关键字的图片
+      /avatar[^"]*"[^>]*src="(https?:\/\/[^"]+)"/i,
     ];
     
     for (const pattern of avatarPatterns) {
       const match = html.match(pattern);
       if (match && match[1]) {
         let avatar = match[1].trim();
+        // 跳过默认头像和占位图
+        if (avatar.includes('default') || avatar.includes('placeholder') || avatar.includes('logo')) {
+          continue;
+        }
         if (avatar.startsWith('//')) avatar = `https:${avatar}`;
         if (avatar.startsWith('http')) {
           result.avatar = avatar;
+          logger.info('segmentfault', '从用户主页 HTML 提取到头像', { avatar: avatar.substring(0, 80) });
           break;
         }
       }
@@ -4225,7 +4240,7 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
   };
 
   // 辅助函数：从 /write 页面的 __NEXT_DATA__ 提取用户信息（对标 cose 项目）
-  const parseWritePageNextData = (html: string): UserInfo | null => {
+  const parseWritePageNextData = async (html: string): Promise<UserInfo | null> => {
     const nextDataMatch = html.match(/<script\s+id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/i);
     if (!nextDataMatch?.[1]) {
       logger.info('segmentfault', '/write 页面未找到 __NEXT_DATA__');
@@ -4239,19 +4254,49 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
       
       if (sessionUser && sessionUser.name) {
         const username = sessionUser.name;
-        const avatar = sessionUser.avatar_url || '';
+        const slug = sessionUser.slug || username;
+        // 尝试多个可能的头像字段
+        let avatar = sessionUser.avatar_url || sessionUser.avatarUrl || sessionUser.avatar || '';
         
+        // 记录原始头像值用于调试
         logger.info('segmentfault', '从 /write 页面 __NEXT_DATA__ 提取到用户信息', { 
-          username, 
-          avatar: avatar ? avatar.substring(0, 50) : '无' 
+          username,
+          slug: sessionUser.slug,
+          avatar_url: sessionUser.avatar_url,
+          avatarUrl: sessionUser.avatarUrl,
+          avatar: sessionUser.avatar,
+          finalAvatar: avatar ? avatar.substring(0, 80) : '无'
         });
+        
+        // 规范化头像 URL
+        if (avatar) {
+          if (avatar.startsWith('//')) {
+            avatar = `https:${avatar}`;
+          } else if (avatar.startsWith('/') && !avatar.startsWith('//')) {
+            avatar = `https://segmentfault.com${avatar}`;
+          }
+        }
+        
+        // 如果没有头像，尝试从用户主页获取
+        if (!avatar && slug) {
+          logger.info('segmentfault', '头像为空，尝试从用户主页获取', { slug });
+          try {
+            const profileResult = await fetchSegmentfaultUserProfile(slug);
+            if (profileResult.avatar) {
+              avatar = profileResult.avatar;
+              logger.info('segmentfault', '从用户主页获取到头像', { avatar: avatar.substring(0, 80) });
+            }
+          } catch (e) {
+            logger.warn('segmentfault', '从用户主页获取头像失败', { error: (e as Error).message });
+          }
+        }
         
         return {
           loggedIn: true,
           platform: 'segmentfault',
-          userId: sessionUser.slug || username,
+          userId: slug,
           nickname: username,
-          avatar: avatar.startsWith('//') ? `https:${avatar}` : avatar,
+          avatar: avatar || undefined,
           detectionMethod: 'html',
         };
       }
@@ -4283,7 +4328,7 @@ async function fetchSegmentfaultUserFromHtml(): Promise<UserInfo> {
 
     if (writeResult.html) {
       // 首先尝试 cose 的方法：从 __NEXT_DATA__ 提取
-      const nextDataResult = parseWritePageNextData(writeResult.html);
+      const nextDataResult = await parseWritePageNextData(writeResult.html);
       if (nextDataResult?.loggedIn) {
         return nextDataResult;
       }
@@ -5100,8 +5145,10 @@ const wechatApi: PlatformApiConfig = {
         if (!lower.startsWith('http')) return false;
         if (lower.includes('favicon') || lower.includes('sprite')) return false;
         if (lower.includes('loading') || lower.includes('placeholder') || lower.includes('default')) return false;
-        if (lower.includes('logo') && !lower.includes('qpic')) return false;
-        if (/(headimg|head_img|avatar|portrait|qpic|weixin|wx)/i.test(lower)) return true;
+        // 微信公众号头像 URL 通常包含 mmbiz.qpic.cn 或 mmbiz.qlogo.cn
+        if (lower.includes('mmbiz.qpic.cn') || lower.includes('mmbiz.qlogo.cn')) return true;
+        // 对齐 cose：允许包含 logo 的 URL（微信头像可能在 logo 字段中）
+        if (/(headimg|head_img|avatar|portrait|qpic|weixin|wx|logo)/i.test(lower)) return true;
         return /\.(png|jpe?g|gif|webp)(?:\?|$)/i.test(lower);
       };
 
@@ -5200,11 +5247,18 @@ const wechatApi: PlatformApiConfig = {
               scope.match(/account_name\s*[:=]\s*["']([^"']+)["']/i) ||
               scope.match(/mp_name\s*[:=]\s*["']([^"']+)["']/i) ||
               scope.match(/<[^>]+class=["'][^"']*(?:weui-desktop-account__nickname|nickname)[^"']*["'][^>]*>([^<]+)<\/[^>]+>/i);
+            // 对齐 cose 项目：优先使用 head_img 字段，然后是 class="avatar" 的 img 标签
             const avatarMatch =
               scope.match(/head_img\s*[:=]\s*["']([^"']+)["']/i) ||
               scope.match(/headimgurl\s*[:=]\s*["']([^"']+)["']/i) ||
-              scope.match(/<img[^>]+class=["'][^"']*(?:weui-desktop-account__avatar|avatar)[^"']*["'][^>]+src=["']([^"']+)["']/i) ||
-              scope.match(/<img[^>]+src=["']([^"']+)["'][^>]+class=["'][^"']*(?:weui-desktop-account__avatar|avatar)[^"']*["']/i) ||
+              // 对齐 cose：简化的 avatar class 匹配
+              scope.match(/<img[^>]*class=["']avatar["'][^>]*src=["']([^"']+)["']/i) ||
+              scope.match(/<img[^>]*src=["']([^"']+)["'][^>]*class=["']avatar["']/i) ||
+              // 更宽松的 avatar class 匹配
+              scope.match(/<img[^>]+class=["'][^"']*(?:weui-desktop-account__avatar|weui-desktop-account__img|avatar)[^"']*["'][^>]+src=["']([^"']+)["']/i) ||
+              scope.match(/<img[^>]+src=["']([^"']+)["'][^>]+class=["'][^"']*(?:weui-desktop-account__avatar|weui-desktop-account__img|avatar)[^"']*["']/i) ||
+              // 匹配微信公众号头像 URL 模式
+              scope.match(/["'](https?:\/\/(?:mmbiz\.qpic\.cn|mmbiz\.qlogo\.cn)\/[^"']+)["']/i) ||
               scope.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
 
             const htmlNickname = cleanNickname(nicknameMatch?.[1]);
@@ -5330,12 +5384,102 @@ const infoqApi: PlatformApiConfig = {
 };
 
 // 百家号 - 使用 Cookie 检测（百度账号体系）
+// 对标 cose 项目：使用 /builder/app/appinfo API 获取用户信息
 const baijiahaoApi: PlatformApiConfig = {
   id: 'baijiahao',
   name: '百家号',
   async fetchUserInfo(): Promise<UserInfo> {
+    // 先检查 BDUSS Cookie 是否存在（百度登录的核心 Cookie）
+    // BDUSS Cookie 可能设置在 .baidu.com 域名下，需要尝试多个 URL
+    let hasBdussCookie = false;
+    const cookieUrls = [
+      'https://baijiahao.baidu.com',
+      'https://www.baidu.com',
+      'https://passport.baidu.com',
+    ];
+    
+    for (const url of cookieUrls) {
+      try {
+        const bdussCookie = await chrome.cookies.get({
+          url,
+          name: 'BDUSS'
+        });
+        
+        if (bdussCookie && bdussCookie.value) {
+          hasBdussCookie = true;
+          logger.info('baijiahao', `找到 BDUSS Cookie (from ${url})`, { 
+            domain: bdussCookie.domain,
+            hasValue: !!bdussCookie.value 
+          });
+          break;
+        }
+      } catch (e: any) {
+        logger.warn('baijiahao', `从 ${url} 获取 Cookie 失败`, { error: e.message });
+      }
+    }
+    
+    if (!hasBdussCookie) {
+      logger.info('baijiahao', '未找到 BDUSS Cookie，用户未登录');
+      return {
+        loggedIn: false,
+        platform: 'baijiahao',
+        error: '未登录百度账号',
+        errorType: AuthErrorType.LOGGED_OUT,
+        retryable: false,
+        detectionMethod: 'cookie',
+      };
+    }
+
+    // 尝试从百家号后台 API 获取用户信息（对标 cose 项目使用的 API）
     try {
-      // 尝试从百家号后台 API 获取用户信息
+      const res = await fetchWithCookies('https://baijiahao.baidu.com/builder/app/appinfo', {
+        headers: {
+          'Accept': 'application/json',
+          'Referer': 'https://baijiahao.baidu.com/',
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        logger.info('baijiahao', 'appinfo API 响应', data);
+
+        // 对标 cose 项目的解析逻辑：data.data.user.username
+        if (data.errno === 0 && data.data?.user?.username) {
+          const user = data.data.user;
+          let avatar = user.avatar || '';
+          // 处理相对协议的头像 URL
+          if (avatar.startsWith('//')) {
+            avatar = 'https:' + avatar;
+          }
+          
+          return {
+            loggedIn: true,
+            platform: 'baijiahao',
+            userId: String(user.id || user.app_id || user.author_id || ''),
+            nickname: user.username || user.name || '百家号用户',
+            avatar: avatar || undefined,
+            detectionMethod: 'api',
+          };
+        }
+        
+        // API 返回但用户信息为空，可能是未登录
+        if (data.errno !== 0) {
+          logger.info('baijiahao', 'API 返回错误码', { errno: data.errno, errmsg: data.errmsg });
+          // 即使 API 返回错误，但有 BDUSS Cookie，仍然认为已登录（对标 cose 项目）
+          return {
+            loggedIn: true,
+            platform: 'baijiahao',
+            nickname: '百家号用户',
+            detectionMethod: 'cookie',
+          };
+        }
+      }
+    } catch (e: any) {
+      logger.warn('baijiahao', 'appinfo API 调用失败', { error: e.message });
+    }
+
+    // 备用 API：尝试 /pcui/author/query
+    try {
       const res = await fetchWithCookies('https://baijiahao.baidu.com/pcui/author/query', {
         headers: {
           'Accept': 'application/json',
@@ -5345,26 +5489,38 @@ const baijiahaoApi: PlatformApiConfig = {
 
       if (res.ok) {
         const data = await res.json();
-        logger.info('baijiahao', 'API 响应', data);
+        logger.info('baijiahao', 'author/query API 响应', data);
 
         if (data.errno === 0 && data.data) {
           const user = data.data;
+          let avatar = user.avatar || user.head_img || '';
+          if (avatar.startsWith('//')) {
+            avatar = 'https:' + avatar;
+          }
+          
           return {
             loggedIn: true,
             platform: 'baijiahao',
-            userId: String(user.app_id || user.author_id || user.id),
+            userId: String(user.app_id || user.author_id || user.id || ''),
             nickname: user.name || user.author_name || '百家号用户',
-            avatar: user.avatar || user.head_img,
+            avatar: avatar || undefined,
             detectionMethod: 'api',
           };
         }
       }
     } catch (e: any) {
-      logger.warn('baijiahao', 'API 调用失败', { error: e.message });
+      logger.warn('baijiahao', 'author/query API 调用失败', { error: e.message });
     }
 
-    // API 失败，使用 Cookie 检测
-    return detectViaCookies('baijiahao');
+    // 所有 API 都失败，但有 BDUSS Cookie，仍然认为已登录（对标 cose 项目的兜底逻辑）
+    // 这种情况下无法获取用户名和头像，但登录状态是有效的
+    logger.info('baijiahao', 'API 失败但有 BDUSS Cookie，认为已登录');
+    return {
+      loggedIn: true,
+      platform: 'baijiahao',
+      nickname: '百家号用户',
+      detectionMethod: 'cookie',
+    };
   },
 };
 

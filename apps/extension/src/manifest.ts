@@ -143,6 +143,10 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
       'https://*.oschina.net/*',
       'https://www.oschina.net/*',
       'https://my.oschina.net/*',
+      
+      // 百家号
+      'https://*.baidu.com/*',
+      'https://baijiahao.baidu.com/*',
     ],
 
     // Web 可访问资源
@@ -292,6 +296,10 @@ const manifest = {
     'https://*.oschina.net/*',
     'https://www.oschina.net/*',
     'https://my.oschina.net/*',
+    
+    // 百家号
+    'https://*.baidu.com/*',
+    'https://baijiahao.baidu.com/*',
   ],
 
   // Web 可访问资源
