@@ -92,6 +92,8 @@ export interface DOMAutomation {
   matchers: string[];
   /** 动态获取编辑器 URL（支持需要用户ID的平台） */
   getEditorUrl?: (accountId?: string) => string | Promise<string>;
+  /** 在页面上下文中创建草稿（用于需要先创建草稿才能编辑的平台，如 InfoQ） */
+  createDraft?: () => Promise<{ success: boolean; draftUrl?: string; error?: string }>;
   fillAndPublish: (
     payload: PlatformPayload,
     options?: any

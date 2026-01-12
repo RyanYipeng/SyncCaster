@@ -359,7 +359,7 @@ export async function publishToTarget(
     if (adapter.kind === 'dom') {
       // DOM 自动化模式：直接走站内执行
       if ((adapter as any).dom) {
-        const dom = (adapter as any).dom as { matchers: string[]; fillAndPublish: Function; getEditorUrl?: (accountId?: string) => string | Promise<string> };
+        const dom = (adapter as any).dom as { matchers: string[]; fillAndPublish: Function; getEditorUrl?: (accountId?: string) => string | Promise<string>; createDraft?: Function };
         const reuseKey = `${jobId}:${target.platform}:${target.accountId}`;
         
         // 获取目标 URL - 优先使用 getEditorUrl 动态生成（支持需要用户ID的平台）
@@ -377,6 +377,34 @@ export async function publishToTarget(
         if (!targetUrl) {
           throw new Error('DOM adapter missing target URL');
         }
+
+        // InfoQ 等平台需要先在页面上下文中创建草稿，然后跳转到草稿编辑页
+        if (dom.createDraft && target.platform === 'infoq') {
+          await jobLogger({ level: 'info', step: 'dom', message: 'InfoQ: 正在创建草稿...' });
+          try {
+            // 先打开 InfoQ 首页（用于获取 cookie）
+            await openOrReuseTab(targetUrl, { active: activeTab, reuseKey });
+            // 等待页面加载
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            // 在页面上下文中执行 createDraft
+            const draftResult = await executeInOrigin<{ success: boolean; draftUrl?: string; error?: string }>(targetUrl, dom.createDraft as any, [], { closeTab: false, active: activeTab, reuseKey });
+            console.log('[publish-engine] InfoQ createDraft result:', draftResult);
+            
+            if (draftResult?.success && draftResult?.draftUrl) {
+              targetUrl = draftResult.draftUrl;
+              await jobLogger({ level: 'info', step: 'dom', message: `InfoQ: 草稿创建成功，跳转到编辑页`, meta: { draftUrl: targetUrl } });
+            } else {
+              const errorMsg = draftResult?.error || '未知错误';
+              await jobLogger({ level: 'error', step: 'dom', message: `InfoQ: 创建草稿失败 - ${errorMsg}，请确保已登录 InfoQ` });
+              throw new Error(`InfoQ 创建草稿失败: ${errorMsg}`);
+            }
+          } catch (e: any) {
+            console.error('[publish-engine] InfoQ createDraft error:', e);
+            await jobLogger({ level: 'error', step: 'dom', message: 'InfoQ: 创建草稿失败', meta: { error: e?.message } });
+            throw e;
+          }
+        }
+
         await jobLogger({ level: 'info', step: 'dom', message: '使用站内执行（DOM 自动化）' });
         console.log('[publish-engine] Executing DOM automation', { targetUrl });
         try {

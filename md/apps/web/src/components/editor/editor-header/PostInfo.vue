@@ -1,23 +1,11 @@
 <script setup lang="ts">
 import type { Post, PostAccount } from '@md/shared/types'
-import { Check, Info, Send } from 'lucide-vue-next'
+import { Check, Info } from 'lucide-vue-next'
 import { CheckboxIndicator, CheckboxRoot, Primitive } from 'radix-vue'
-import { useEditorStore } from '@/stores/editor'
-import { useRenderStore } from '@/stores/render'
-import { useUIStore } from '@/stores/ui'
 
 defineOptions({
   inheritAttrs: false,
 })
-
-const editorStore = useEditorStore()
-const { editor } = storeToRefs(editorStore)
-
-const renderStore = useRenderStore()
-const { output } = storeToRefs(renderStore)
-
-const uiStore = useUIStore()
-const { isMobile } = storeToRefs(uiStore)
 
 const dialogVisible = ref(false)
 const extensionInstalled = ref(false)
@@ -34,43 +22,6 @@ const form = ref<Post>({
 })
 
 const allowPost = computed(() => extensionInstalled.value && form.value.accounts.some(a => a.checked))
-
-async function prePost() {
-  if (extensionInstalled.value && allAccounts.value.length === 0) {
-    await getAccounts()
-  }
-
-  let auto: Post = {
-    thumb: ``,
-    title: ``,
-    desc: ``,
-    content: ``,
-    markdown: ``,
-    accounts: [],
-  }
-  const accounts = allAccounts.value.filter(a => ![`ipfs`].includes(a.type))
-  try {
-    auto = {
-      thumb: document.querySelector<HTMLImageElement>(`#output img`)?.src ?? ``,
-      title: [1, 2, 3, 4, 5, 6]
-        .map(h => document.querySelector(`#output h${h}`)!)
-        .find(h => h)
-        ?.textContent ?? ``,
-      desc: document.querySelector(`#output p`)?.textContent?.trim() ?? ``,
-      content: output.value,
-      markdown: editor.value?.state.doc.toString() ?? ``,
-      accounts,
-    }
-  }
-  catch (error) {
-    console.log(`error`, error)
-  }
-  finally {
-    form.value = {
-      ...auto,
-    }
-  }
-}
 
 declare global {
   interface Window {
@@ -131,12 +82,7 @@ onBeforeMount(() => {
 <template>
   <div v-bind="$attrs">
     <Dialog v-model:open="dialogVisible" @update:open="onUpdate">
-      <DialogTrigger>
-        <Button v-if="!isMobile" variant="outline" class="h-9" @click="prePost">
-          <Send class="mr-2 h-4 w-4" />
-          发布
-        </Button>
-      </DialogTrigger>
+      <!-- 发布按钮已移除，使用"发布到微信"按钮代替 -->
       <DialogContent>
         <DialogHeader>
           <DialogTitle>发布</DialogTitle>
