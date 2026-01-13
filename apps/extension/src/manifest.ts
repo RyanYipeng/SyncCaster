@@ -8,7 +8,7 @@ export function getManifest(mode: 'development' | 'production'): chrome.runtime.
     manifest_version: 3,
     name: isDev ? '[DEV] SyncCaster' : 'SyncCaster',
     version: '2.0.0',
-    description: '多平台内容同步助手 - 一次编辑，处处发布',
+    description: '多平台文章同步助手 - 一次编辑，处处发布',
     
     // 图标
     icons: {

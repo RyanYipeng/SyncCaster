@@ -34,20 +34,28 @@ SyncCaster 是一个浏览器扩展，帮助内容创作者将文章一键同步
 | 博客园 | ✅ | ✅ | 需开启数学公式支持 |
 | 51CTO | ✅ | ✅ | |
 | 腾讯云 | ✅ | ✅ | |
-| 知乎 | ❌ | ⚠️ | 富文本编辑器 |
-| 简书 | ✅ | ❌ | |
-| 阿里云 | ✅ | ⚠️ | |
-| 思否 | ✅ | ⚠️ | |
-| 哔哩哔哩 | ✅ | ❌ | |
-| 微信公众号 | ❌ | ✅ | 富文本编辑器，支持主题样式 |
-| 开源中国 | ✅ | ⚠️ | |
-| 今日头条 | ❌ | ❌ | 富文本编辑器 |
-| InfoQ | ✅ | ⚠️ | |
-| 百家号 | ❌ | ❌ | 富文本编辑器 |
-| 网易号 | ❌ | ❌ | 富文本编辑器 |
-| Medium | ✅ | ❌ | 英文平台 |
+| 知乎 | ✅ | ✅ | 富文本编辑器 |
+| 简书 | ✅ | ✅ | |
+| 阿里云 | ✅ | ✅ | |
+| 思否 | ✅ | ✅ | |
+| 哔哩哔哩 | ✅ | ✅ | |
+| 微信公众号 | ✅ | ✅ | 富文本编辑器，支持主题样式 |
+| 开源中国 | ✅ | ✅ | |
+| 今日头条 | ✅ | ✅ | 富文本编辑器 |
+| InfoQ | ✅ | ✅ | |
+| 百家号 | ✅ | ✅ | 富文本编辑器 |
+| 网易号 | ✅ | ✅ | 富文本编辑器 |
+| Medium | ✅ | ✅ | 英文平台 |
 
 ## 快速开始
+
+### 方式一：在线安装（推荐）
+
+1. 访问 [Chrome 应用商店](https://chrome.google.com/webstore/detail/synccaster/[extension-id])
+2. 点击 **添加至 Chrome**
+3. 确认安装即可使用
+
+### 方式二：本地开发
 
 ```bash
 # 安装依赖
@@ -63,7 +71,7 @@ pnpm build
 pnpm test
 ```
 
-### 加载扩展
+#### 加载本地扩展
 
 1. 打开 Chrome，访问 `chrome://extensions/`
 2. 开启右上角的 **开发者模式**
@@ -335,18 +343,10 @@ export class NewPlatformAdapter extends BaseAdapter {
 - [微信格式化器](./docs/WECHAT_FORMATTER.md)
 - [跨平台发布](./docs/CROSS_PLATFORM_PUBLISH.md)
 - [规范化 AST 升级](./docs/CANONICAL_AST_UPGRADE.md)
-- [登录状态管理](./docs/LOGIN_STATE_MANAGEMENT.md)
-- [账号刷新优化](./docs/ACCOUNT_REFRESH_IMPROVEMENT.md)
-- [测试清单](./docs/TEST_CHECKLIST.md)
 
 ## License
 
-MIT License
-
-Copyright (c) 2026-present [RyanYipeng]
-
 本项目基于 [MIT 许可证](./LICENSE) 开源。
-
 
 
 如有问题或建议，欢迎提交 [Issue](https://github.com/RyanYipeng/SyncCaster/issues) 或 [Pull Request](https://github.com/RyanYipeng/SyncCaster/pulls)。
