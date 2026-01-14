@@ -63,7 +63,7 @@ SyncCaster 是一个浏览器扩展，帮助内容创作者将文章一键同步
 - 智能提取标题、正文、图片、公式
 - 基于 AST 的规范化处理（CanonicalAST）
 - 转换为统一的 Markdown 格式
-![alt text](SyncCaster小窗.png)
+![alt text](docs/SyncCaster小窗.png)
 
 ### 2. Markdown 编辑器
 - 内置功能完整的 Markdown 编辑器
@@ -71,26 +71,28 @@ SyncCaster 是一个浏览器扩展，帮助内容创作者将文章一键同步
 - LaTeX 数学公式渲染（KaTeX）
 - Mermaid 图表支持
 - 多种主题样式
-![alt text](SyncCaster文章编辑页.png)
+![alt text](docs/SyncCaster文章编辑页.png)
+
 ### 3. 多平台发布
 - 支持 17+ 主流博客平台
 - DOM 自动化模拟人工发布
 - 统一的适配器接口
 - 智能图片处理和上传
-![alt text](SyncCaster主页.png)
+![alt text](docs/SyncCaster主页.png)
 
 ### 4. 账号管理
 - 自动检测平台登录状态
 - Cookie 过期预警
 - 一键刷新账号状态
 - 支持重新登录
-![alt text](SyncCaster账号管理页.png)
+![alt text](docs/SyncCaster账号管理页.png)
+
 ### 5. 任务管理
 - 发布任务队列
 - 实时进度跟踪
 - 详细日志记录
 - 失败重试机制
-![alt text](SyncCaster任务中心页.png)
+![alt text](docs/SyncCaster任务中心页.png)
 
 ## 📁 项目结构
 
