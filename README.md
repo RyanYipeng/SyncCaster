@@ -1,8 +1,8 @@
 <div align="center">
 
-# ✨ SyncCaster
+# <img src="apps/extension/public/assets/icon-128.png" alt="SyncCaster" width="36" align="absmiddle" /> SyncCaster：多平台文章同步助手
 
-_**一次编辑，处处发布**_
+_**一次编辑，处处发布 —— 多平台内容同步 Chrome 扩展**_
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Chrome Extension](https://img.shields.io/badge/Chrome-Extension%20MV3-4285F4?logo=googlechrome&logoColor=white)](#)
@@ -15,7 +15,7 @@ SyncCaster 是一个浏览器扩展，帮助内容创作者将文章一键同步
 
 > 🔒 本扩展完全本地运行，不收集、不存储任何用户信息。**如需添加更多平台或改善同步准确度，欢迎提 Issue 或 PR**。
 
-## 特性
+## ✨ 特性
 
 - 📝 内置 Markdown 编辑器，支持实时预览
 - 🔍 智能采集任意网页文章内容
@@ -25,7 +25,7 @@ SyncCaster 是一个浏览器扩展，帮助内容创作者将文章一键同步
 - 🎨 微信公众号同步时完整保留渲染样式
 - 🧮 支持 LaTeX 数学公式渲染
 
-## 已支持的平台
+## 🌐 已支持的平台
 
 | 平台 | Markdown | LaTeX | 备注 |
 |:----:|:--------:|:-----:|:-----|
@@ -47,30 +47,52 @@ SyncCaster 是一个浏览器扩展，帮助内容创作者将文章一键同步
 | 网易号 | ✅ | ✅ | 富文本编辑器 |
 | Medium | ✅ | ✅ | 英文平台 |
 
-## 快速开始
+## 🛠️ 技术栈
 
-```bash
-# 安装依赖
-pnpm install
+- **前端框架**: Vue 3 + TypeScript
+- **构建工具**: Vite + pnpm (monorepo)
+- **UI 框架**: Naive UI + UnoCSS
+- **数据存储**: IndexedDB (Dexie.js)
+- **Markdown**: marked + highlight.js + KaTeX + Mermaid
+- **扩展 API**: Chrome Extension Manifest V3
 
-# 开发模式
-pnpm dev
+## ⚙️ 核心功能
 
-# 构建
-pnpm build
+### 1. 内容采集
+- 从任意网页采集文章内容
+- 智能提取标题、正文、图片、公式
+- 基于 AST 的规范化处理（CanonicalAST）
+- 转换为统一的 Markdown 格式
+![alt text](SyncCaster小窗.png)
 
-# 运行测试
-pnpm test
-```
+### 2. Markdown 编辑器
+- 内置功能完整的 Markdown 编辑器
+- 实时预览，支持代码高亮
+- LaTeX 数学公式渲染（KaTeX）
+- Mermaid 图表支持
+- 多种主题样式
+![alt text](SyncCaster文章编辑页.png)
+### 3. 多平台发布
+- 支持 17+ 主流博客平台
+- DOM 自动化模拟人工发布
+- 统一的适配器接口
+- 智能图片处理和上传
+![alt text](SyncCaster主页.png)
 
-#### 加载本地扩展
+### 4. 账号管理
+- 自动检测平台登录状态
+- Cookie 过期预警
+- 一键刷新账号状态
+- 支持重新登录
+![alt text](SyncCaster账号管理页.png)
+### 5. 任务管理
+- 发布任务队列
+- 实时进度跟踪
+- 详细日志记录
+- 失败重试机制
+![alt text](SyncCaster任务中心页.png)
 
-1. 打开 Chrome，访问 `chrome://extensions/`
-2. 开启右上角的 **开发者模式**
-3. 点击 **加载已解压的扩展程序**
-4. 选择 `apps/extension/dist` 目录
-
-## 项目结构
+## 📁 项目结构
 
 ```
 SyncCaster/
@@ -164,49 +186,7 @@ SyncCaster/
 └── scripts/                    # 构建脚本
 ```
 
-## 技术栈
-
-- **前端框架**: Vue 3 + TypeScript
-- **构建工具**: Vite + pnpm (monorepo)
-- **UI 框架**: Naive UI + UnoCSS
-- **数据存储**: IndexedDB (Dexie.js)
-- **Markdown**: marked + highlight.js + KaTeX + Mermaid
-- **扩展 API**: Chrome Extension Manifest V3
-
-## 核心功能
-
-### 1. 内容采集
-- 从任意网页采集文章内容
-- 智能提取标题、正文、图片、公式
-- 基于 AST 的规范化处理（CanonicalAST）
-- 转换为统一的 Markdown 格式
-
-### 2. Markdown 编辑器
-- 内置功能完整的 Markdown 编辑器
-- 实时预览，支持代码高亮
-- LaTeX 数学公式渲染（KaTeX）
-- Mermaid 图表支持
-- 多种主题样式
-
-### 3. 多平台发布
-- 支持 17+ 主流博客平台
-- DOM 自动化模拟人工发布
-- 统一的适配器接口
-- 智能图片处理和上传
-
-### 4. 账号管理
-- 自动检测平台登录状态
-- Cookie 过期预警
-- 一键刷新账号状态
-- 支持重新登录
-
-### 5. 任务管理
-- 发布任务队列
-- 实时进度跟踪
-- 详细日志记录
-- 失败重试机制
-
-## 适配器架构
+## 🔌 适配器架构
 
 ### 适配器接口
 
@@ -252,7 +232,7 @@ interface PlatformAdapter {
 5. 标签页自动归入分组
 ```
 
-## 数据模型
+## 📊 数据模型
 
 ### CanonicalPost（统一内容模型）
 
@@ -296,8 +276,35 @@ interface Job {
   logs: LogEntry[];
 }
 ```
+## 🚀 快速开始
 
-## 开发指南
+```bash
+# 克隆仓库
+git clone git@github.com:RyanYipeng/SyncCaster.git
+cd SyncCaster
+
+# 安装依赖
+pnpm install
+
+# 构建扩展
+pnpm build
+```
+
+#### 加载本地扩展
+
+1. 打开 Chrome，访问 `chrome://extensions/`
+2. 开启右上角的 **开发者模式**
+3. 点击 **加载已解压的扩展程序**
+4. 选择 `apps/extension/dist` 目录
+
+#### 开发者命令
+
+```bash
+pnpm dev    # 开发模式（热更新）
+pnpm test   # 运行测试
+```
+
+## 📖 开发指南
 
 ### 添加新适配器
 
@@ -329,14 +336,21 @@ export class NewPlatformAdapter extends BaseAdapter {
 2. **查看页面日志**: 在目标平台页面打开开发者工具
 3. **调试模式**: 修改 `publish-engine.ts` 中的 `closeTab: false` 保持标签页打开
 
-## 相关文档
+## 📚 相关文档
 
 - [微信公众号发布流程](./docs/WECHAT_PUBLISH_FLOW.md)
 - [微信格式化器](./docs/WECHAT_FORMATTER.md)
 - [跨平台发布](./docs/CROSS_PLATFORM_PUBLISH.md)
 - [规范化 AST 升级](./docs/CANONICAL_AST_UPGRADE.md)
 
-## License
+## 🙏 致谢
+感谢下面的开源项目：
+- [md](https://github.com/doocs/md)
+
+## ⭐ Star History
+[![Star History Chart](https://api.star-history.com/svg?repos=RyanYipeng/SyncCaster&type=date&legend=top-left)](https://www.star-history.com/#RyanYipeng/SyncCaster&type=date&legend=top-left)
+
+## 📄 License
 
 本项目基于 [MIT 许可证](./LICENSE) 开源。
 
