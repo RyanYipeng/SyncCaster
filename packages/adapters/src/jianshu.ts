@@ -56,7 +56,7 @@ export const jianshuAdapter: PlatformAdapter = {
     matchers: ['https://www.jianshu.com/writer*'],
     fillAndPublish: async function (payload) {
       console.log('[jianshu] fillAndPublish starting', { url: window.location.href });
-      
+
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
       const isVisible = (el: Element) => {
@@ -77,7 +77,7 @@ export const jianshuAdapter: PlatformAdapter = {
           try {
             const res = check();
             if (res) return res as T;
-          } catch {}
+          } catch { }
           await sleep(intervalMs);
         }
         try {
@@ -89,7 +89,7 @@ export const jianshuAdapter: PlatformAdapter = {
             codeMirror: !!document.querySelector('.CodeMirror'),
             kalamuArea: !!document.querySelector('.kalamu-area'),
           });
-        } catch {}
+        } catch { }
         throw new Error('等待页面元素超时');
       };
 
@@ -116,7 +116,7 @@ export const jianshuAdapter: PlatformAdapter = {
 
         try {
           el.focus?.();
-        } catch {}
+        } catch { }
 
         if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
           setNativeValue(el, v);
@@ -126,30 +126,30 @@ export const jianshuAdapter: PlatformAdapter = {
           } catch {
             try {
               (el as any).innerText = v;
-            } catch {}
+            } catch { }
           }
           try {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-          } catch {}
+          } catch { }
         } else if (typeof anyEl.value === 'string') {
           try {
             anyEl.value = v;
-          } catch {}
+          } catch { }
           try {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-          } catch {}
+          } catch { }
         }
 
         // 一些版本可能依赖 keyup/blur 才会同步标题
         try {
           el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true } as any));
           el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true } as any));
-        } catch {}
+        } catch { }
         try {
           el.dispatchEvent(new Event('blur', { bubbles: true }));
-        } catch {}
+        } catch { }
       };
 
       const findTitleInput = (): HTMLInputElement | HTMLTextAreaElement | null => {
@@ -254,7 +254,7 @@ export const jianshuAdapter: PlatformAdapter = {
         for (const el of all) {
           try {
             if (el.closest('.CodeMirror')) continue;
-          } catch {}
+          } catch { }
 
           const rect = el.getBoundingClientRect();
           if (rect.width < 160) continue;
@@ -326,25 +326,25 @@ export const jianshuAdapter: PlatformAdapter = {
             if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
               try {
                 el.setSelectionRange(0, (el.value || '').length);
-              } catch {}
+              } catch { }
               try {
                 document.execCommand?.('insertText', false, title);
-              } catch {}
+              } catch { }
               try {
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
-              } catch {}
+              } catch { }
             } else if (el.isContentEditable) {
               try {
                 document.execCommand?.('selectAll', false);
                 document.execCommand?.('insertText', false, title);
-              } catch {}
+              } catch { }
               try {
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
-              } catch {}
+              } catch { }
             }
-          } catch {}
+          } catch { }
 
           await sleep(120);
           const got2 = normalizeText(readEditableText(el));
@@ -459,10 +459,10 @@ export const jianshuAdapter: PlatformAdapter = {
       const clickEl = (el: HTMLElement) => {
         try {
           el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        } catch {}
+        } catch { }
         try {
           (el as any).click?.();
-        } catch {}
+        } catch { }
       };
 
       const normalizeMarkdownImageUrls = (md: string): string => {
@@ -749,20 +749,20 @@ export const jianshuAdapter: PlatformAdapter = {
         // 检查当前文章是否有内容
         const cm = getCodeMirror();
         const kalamuEl = getKlamuArea();
-	        const currentTitle = titleInput?.value?.trim() || '';
-	        const bodyTextarea = getBodyTextarea();
-	        const currentContent =
-	          cm?.getValue?.()?.trim() || bodyTextarea?.value?.trim() || kalamuEl?.innerText?.trim() || '';
+        const currentTitle = titleInput?.value?.trim() || '';
+        const bodyTextarea = getBodyTextarea();
+        const currentContent =
+          cm?.getValue?.()?.trim() || bodyTextarea?.value?.trim() || kalamuEl?.innerText?.trim() || '';
 
-	        // 仅在“当前稿件确实有内容”时才尝试新建；切换 Markdown 失败不应阻断填充。
-	        const titleLooksDefaultDate =
-	          /^\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}$/.test(currentTitle) || /^\d{4}年\d{1,2}月\d{1,2}日$/.test(currentTitle);
-	        const shouldCreateNew = (!titleLooksDefaultDate && !!currentTitle) || currentContent.length > 10;
+        // 仅在“当前稿件确实有内容”时才尝试新建；切换 Markdown 失败不应阻断填充。
+        const titleLooksDefaultDate =
+          /^\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}$/.test(currentTitle) || /^\d{4}年\d{1,2}月\d{1,2}日$/.test(currentTitle);
+        const shouldCreateNew = (!titleLooksDefaultDate && !!currentTitle) || currentContent.length > 10;
 
         const clearCurrentDraft = () => {
           try {
             titleInput && setNativeValue(titleInput, '');
-          } catch {}
+          } catch { }
           try {
             const cmNow = getCodeMirror();
             if (cmNow) {
@@ -770,23 +770,23 @@ export const jianshuAdapter: PlatformAdapter = {
               cmNow.refresh?.();
               return;
             }
-          } catch {}
+          } catch { }
           try {
             const taNow = getBodyTextarea();
             if (taNow) {
               setNativeValue(taNow, '');
               return;
             }
-          } catch {}
+          } catch { }
           try {
             const kalamuNow = getKlamuArea();
             if (kalamuNow) {
               kalamuNow.innerHTML = '<p><br></p>';
               kalamuNow.dispatchEvent(new Event('input', { bubbles: true }));
             }
-          } catch {}
+          } catch { }
         };
-        
+
         // 如果当前文章有内容（或需让 Markdown 设置生效），尽量新建文章（避免覆写用户草稿）
         if (shouldCreateNew) {
           console.log('[jianshu] 当前文章有内容，尝试新建文章', {
@@ -813,35 +813,44 @@ export const jianshuAdapter: PlatformAdapter = {
               const titleCleared = !t;
               const contentChanged = c !== currentContent;
               const contentLooksEmpty = !c || c.length <= 2;
-              if (!(titleCleared || titleChanged || contentChanged || contentLooksEmpty)) return null;
+              // 关键修复：需要同时满足标题和内容条件才能确认新文章已激活
+              // 原来使用 OR 逻辑会导致过早返回（如单独的 contentLooksEmpty 在旧文章时可能也为真）
+              const titleIndicatesNew = titleCleared || titleChanged;
+              const contentIndicatesNew = contentLooksEmpty || contentChanged;
+              if (!(titleIndicatesNew && contentIndicatesNew)) return null;
               return ti;
             }, 20000);
 
             if (nextTitleInput) {
               titleInput = nextTitleInput;
+              // 添加稳定延迟，确保 UI 完全更新到新文章
+              await sleep(300);
+              console.log('[jianshu] ✓ 新文章已激活');
             } else {
               console.warn('[jianshu] 新建文章未确认成功，继续复用当前稿件并清空后填充');
               // 兜底：复用当前稿件，先清空再填充，保证不会“什么都不填”
               titleInput = findTitleInput() || titleInput;
               clearCurrentDraft();
+              await sleep(200);
             }
           } else {
             console.warn('[jianshu] 未找到新建文章按钮，继续复用当前文章');
             clearCurrentDraft();
+            await sleep(200);
           }
         }
-        
+
         // ===== 2. 填充标题 =====
         // 标题输入框在不同版本下可能异步挂载，因此不强依赖 titleInput 变量
 
-	        // ===== 3. 快速填充正文（先让用户看到内容） =====
-	        fillBody(markdown);
-	        console.log('[jianshu] ✓ 正文已快速填充');
+        // ===== 3. 快速填充正文（先让用户看到内容） =====
+        fillBody(markdown);
+        console.log('[jianshu] ✓ 正文已快速填充');
 
-	        // ===== 2. 填充标题（避免标题填充耗时阻塞首屏） =====
-	        const titleOk1 = await setTitleRobust(title);
-	        if (titleOk1) console.log('[jianshu] ✓ 标题已填充');
-	        else console.warn('[jianshu] 标题填充可能未生效，稍后将重试');
+        // ===== 2. 填充标题（避免标题填充耗时阻塞首屏） =====
+        const titleOk1 = await setTitleRobust(title);
+        if (titleOk1) console.log('[jianshu] ✓ 标题已填充');
+        else console.warn('[jianshu] 标题填充可能未生效，稍后将重试');
 
         // ===== 4. 上传图片并替换链接（后台处理） =====
         const downloadedImagesRaw = (payload as any).__downloadedImages;
@@ -1008,10 +1017,10 @@ export const jianshuAdapter: PlatformAdapter = {
                   try {
                     cmUpload.setValue(`${beforeText}\n\n<!-- SyncCaster image upload zone -->\n`);
                     cmUpload.refresh?.();
-                  } catch {}
+                  } catch { }
                   try {
                     if (scrollEl) scrollEl.scrollTop = beforeScrollTop;
-                  } catch {}
+                  } catch { }
 
                   const beforeUrls = new Set(extractUrls(beforeText));
                   allUploaded.forEach((u) => beforeUrls.add(u));
@@ -1019,7 +1028,7 @@ export const jianshuAdapter: PlatformAdapter = {
                   try {
                     pasteTarget.focus?.();
                     pasteTarget.dispatchEvent(new Event('focus', { bubbles: true }));
-                  } catch {}
+                  } catch { }
 
                   let ok = simulatePasteFile(pasteTarget, file);
                   if (!ok) ok = simulateDropFile(pasteTarget, file);
@@ -1044,10 +1053,10 @@ export const jianshuAdapter: PlatformAdapter = {
                   try {
                     cmUpload.setValue(beforeText);
                     cmUpload.refresh?.();
-                  } catch {}
+                  } catch { }
                   try {
                     if (scrollEl) scrollEl.scrollTop = beforeScrollTop;
-                  } catch {}
+                  } catch { }
                 }
 
                 await sleep(300);
@@ -1077,10 +1086,10 @@ export const jianshuAdapter: PlatformAdapter = {
                   try {
                     taUpload.selectionStart = uploadText.length;
                     taUpload.selectionEnd = uploadText.length;
-                  } catch {}
+                  } catch { }
                   try {
                     taUpload.scrollTop = beforeScrollTop;
-                  } catch {}
+                  } catch { }
 
                   let ok = simulatePasteFile(taUpload as any, file);
                   if (!ok) ok = simulateDropFile(taUpload as any, file);
@@ -1103,10 +1112,10 @@ export const jianshuAdapter: PlatformAdapter = {
                   // 恢复正文
                   try {
                     setNativeValue(taUpload, beforeText);
-                  } catch {}
+                  } catch { }
                   try {
                     taUpload.scrollTop = beforeScrollTop;
-                  } catch {}
+                  } catch { }
                 }
 
                 await sleep(300);
@@ -1153,7 +1162,7 @@ export const jianshuAdapter: PlatformAdapter = {
                       if (!beforeSrcSet.has(src)) {
                         try {
                           img.remove();
-                        } catch {}
+                        } catch { }
                       }
                     });
                   } catch (e: any) {
@@ -1163,7 +1172,7 @@ export const jianshuAdapter: PlatformAdapter = {
                     try {
                       kalamuArea.innerHTML = stableHtml;
                       kalamuArea.dispatchEvent(new Event('input', { bubbles: true }));
-                    } catch {}
+                    } catch { }
                   }
 
                   await sleep(300);
@@ -1197,14 +1206,14 @@ export const jianshuAdapter: PlatformAdapter = {
 
           console.log('[jianshu] 图片处理完成', { total: images.length, success: imageUrlMap.size });
         }
-        
+
         // ===== 5. 再次确认标题（部分版本可能会被默认日期覆盖） =====
         const titleOk2 = await setTitleRobust(title);
         if (!titleOk2) console.warn('[jianshu] 标题二次确认未成功，请手动检查标题');
-        
+
         console.log('[jianshu] ✅ 填充完成，请手动发布');
 
-        return { 
+        return {
           url: window.location.href,
           success: true,
           __synccasterNote: '内容已填充，请手动点击发布按钮'
