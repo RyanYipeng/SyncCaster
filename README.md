@@ -285,7 +285,7 @@ interface Job {
 适合普通用户，无需安装任何开发工具。
 
 1. 前往 [Releases 页面](https://github.com/RyanYipeng/SyncCaster/releases) 下载最新版本
-2. 下载 `synccaster-x.x.x.zip` 文件
+2. 下载 `Source code.zip` 文件
 3. 解压 ZIP 文件到任意文件夹（如 `D:\SyncCaster`）
 4. 打开 Chrome，访问 `chrome://extensions/`
 5. 开启右上角的 **开发者模式**
